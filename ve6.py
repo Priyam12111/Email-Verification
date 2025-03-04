@@ -30,6 +30,7 @@ class EmailVerifier:
         self.smtp_port = smtp_port
         self.disposable_domains = self.load_disposable_domains()
         self.catch_all_domains = set()
+        self.blocked_domains = set()
         self.mx_cache = {}
         self.smtp_semaphore = asyncio.Semaphore(concurrency)
         self.domain_rates = defaultdict(int)
@@ -124,6 +125,13 @@ class EmailVerifier:
             except Exception as e:
                 logging.error(f"SMTP check error for {host}: {e}")
                 self.error_desc = str(e)
+                if "4.2.1" in self.error_desc:
+                    self.blocked_domains.add(domain)
+                    self.catch_all_domains.add(domain)
+                    with open('blocked_domains.csv','a') as f:
+                        f.write(f"{domain}\n")
+                    await logging.info(f"Sleeping for 5 minutes due to blocked domain {domain}.")
+                    await asyncio.sleep(300)
                 return False
         return False
     async def verify_email(self, email,id):
@@ -164,7 +172,6 @@ class EmailVerifier:
         smtp_valid = await self.smtp_check(email, mx_servers)
         if not smtp_valid:
             self.validate_emails[id].append(False)
-
             return {
                 'email': email,
                 'valid': False,
