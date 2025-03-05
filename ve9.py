@@ -1,31 +1,40 @@
 import asyncio
-import csv
-import logging
-from collections import defaultdict
 from datetime import datetime
-from email.utils import parseaddr
-import re
+import logging
 import aiodns
-import aiosmtplib
-import requests
+import re
+import csv
+import time
+import sys
 from tqdm import tqdm
+from email.utils import parseaddr
+from collections import defaultdict
+import requests
+import aiosmtplib
+import random
+import string
 
-EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+
+logging.basicConfig(filename='email_verifier.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$')
 
 class EmailVerifier:
-    def __init__(self, concurrency=2, timeout=60, smtp_port=587):  # Changed default port to 587
+    def __init__(self, concurrency=2, timeout=60):
         self.resolver = aiodns.DNSResolver()
         self.timeout = timeout
-        self.smtp_port = smtp_port
         self.disposable_domains = self.load_disposable_domains()
         self.catch_all_domains = set()
         self.blocked_domains = set()
         self.mx_cache = {}
         self.smtp_semaphore = asyncio.Semaphore(concurrency)
         self.domain_rates = defaultdict(int)
-        self.error_desc = ""
+        self.error_desc =""
         self.validate_emails = defaultdict(list)
-
     @staticmethod
     def load_disposable_domains():
         try:
@@ -35,7 +44,7 @@ class EmailVerifier:
             )
             return set(response.text.splitlines())
         except Exception:
-            return {'tempmail.com', 'mailinator.com'}
+            return set(['tempmail.com', 'mailinator.com'])  
 
     async def check_syntax(self, email):
         if not EMAIL_REGEX.match(email):
@@ -49,7 +58,10 @@ class EmailVerifier:
         local, domain = parts
         if not local or not domain:
             return False
-        return not (domain.startswith('.') and not domain.endswith('.') and ('.' in domain))
+        
+        if domain.startswith('.') or domain.endswith('.') or '.' not in domain:
+            return False
+        return True
 
     async def check_disposable(self, domain):
         return domain.lower() in self.disposable_domains
@@ -59,146 +71,183 @@ class EmailVerifier:
             return self.mx_cache[domain]
         try:
             records = await self.resolver.query(domain, 'MX')
-            mx_records = sorted((record.priority, record.host) for record in records)
+            mx_records = sorted([(record.priority, record.host) for record in records])
             self.mx_cache[domain] = mx_records
             return mx_records
         except aiodns.error.DNSError:
             try:
+                
                 a_records = await self.resolver.query(domain, 'A')
             except aiodns.error.DNSError:
                 a_records = []
             try:
+                
                 aaaa_records = await self.resolver.query(domain, 'AAAA')
             except aiodns.error.DNSError:
                 aaaa_records = []
             if a_records or aaaa_records:
+                
                 self.mx_cache[domain] = [(0, domain)]
                 return [(0, domain)]
-            self.mx_cache[domain] = []
-            return []
+            else:
+                self.mx_cache[domain] = []
+                return []
 
     async def smtp_check(self, email, mx_servers):
         domain = email.split('@')[1]
         if domain in self.catch_all_domains:
             return True
-        
         self.domain_rates[domain] += 1
-        if self.domain_rates[domain] > 5:
-            logging.info(f"Rate limiting for {domain}")
-            await asyncio.sleep(1)
+        if (self.domain_rates[domain]) > 5:
+            await asyncio.sleep(60)
+            logging.info(f"Sleeping due to high rate to {domain}.")
             self.domain_rates[domain] = 0
 
         for priority, host in mx_servers:
-            try:
-                async with self.smtp_semaphore:
-                    smtp = aiosmtplib.SMTP(
-                        hostname=host,
-                        port=self.smtp_port,
-                        timeout=self.timeout
-                    )
+            for port, tls_config in [(587, {"start_tls": True}), (465, {"use_tls": True})]:
+                try:
+                    async with self.smtp_semaphore:
+                        smtp = aiosmtplib.SMTP(
+                            hostname=host,
+                            port=port,
+                            timeout=self.timeout,
+                            **tls_config
+                        )
+                        await smtp.connect()
+                        code, _ = await smtp.ehlo()
+                        if code != 250:
+                            await smtp.helo()
 
-                    await smtp.connect()
-                    code, _ = await smtp.ehlo()
-                    if code != 250:
-                        await smtp.helo()
+                        await smtp.mail(f"no-reply@{domain}")
+                        await asyncio.sleep(1)
 
-                    # Add STARTTLS for port 587
-                    if self.smtp_port == 587:
-                        await smtp.starttls()
-
-                    await smtp.mail(f"no-reply@{domain}")
-                    code, _ = await smtp.rcpt(email)
-                    await smtp.quit()
-
-                    if code == 250:
-                        return True
-                    if code == 252:  # Catch-all server
-                        self.catch_all_domains.add(domain)
-                        return True
-            except Exception as e:
-                logging.error(f"SMTP error {host}: {str(e)}")
-                self.error_desc = str(e)
-                if "421" in self.error_desc:  # Server busy
-                    await asyncio.sleep(300)
-                return False
+                        code, _ = await smtp.rcpt(email)
+                        await smtp.quit()
+                        if code == 250:
+                            return True
+                        elif code == 252:
+                            self.catch_all_domains.add(domain)
+                            return True
+                except Exception as e:
+                    logging.error(f"SMTP error on {host}:{port}: {e}")
+                    self.error_desc = str(e)
+                    if "4.2.1" in self.error_desc:
+                        self.blocked_domains.add(domain)
+                        with open('blocked_domains.csv', 'a') as f:
+                            f.write(f"{domain}\n")
+                        await logging.info(f"Blocked {domain}. Sleeping 5min.")
+                        await asyncio.sleep(300)
+                    continue
         return False
-
-    async def verify_email(self, email, id):
-        domain = email.split('@')[1] if '@' in email else ''
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+    async def verify_email(self, email,id):
+        parts = email.split('@')
+        domain = parts[1] if len(parts) > 1 else ''
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
         if not await self.check_syntax(email):
-            return self._result(email, False, 'Invalid syntax', domain)
+            return {
+                'email': email,
+                'valid': False,
+                'reason': 'Invalid syntax',
+                'catch_all': domain in self.catch_all_domains,
+                'timestamp': current_time
+            }
 
         if await self.check_disposable(domain):
-            return self._result(email, False, 'Disposable domain', domain)
+            return {
+                'email': email,
+                'valid': False,
+                'reason': 'Disposable domain',
+                'catch_all': domain in self.catch_all_domains,
+                'timestamp': current_time
+            }
 
         mx_servers = await self.get_mx_servers(domain)
         if not mx_servers:
-            return self._result(email, False, 'No MX records', domain)
+            self.validate_emails[id].append(False)
 
-        if not await self.smtp_check(email, mx_servers):
-            return self._result(email, False, 'Mailbox not found', domain)
+            return {
+                'email': email,
+                'valid': False,
+                'reason': 'No MX records/servers',
+                'catch_all': domain in self.catch_all_domains,
+                'timestamp': current_time
+            }
 
-        # Catch-all check
-        if not await self._catch_all_check(domain, mx_servers):
-            return self._result(email, True, 'Valid email', domain, catch_all=False)
+        smtp_valid = await self.smtp_check(email, mx_servers)
+        if not smtp_valid:
+            self.validate_emails[id].append(False)
+            return {
+                'email': email,
+                'valid': False,
+                'reason': 'Mailbox not found',
+                'catch_all': domain in self.catch_all_domains,
+                'timestamp': current_time,
+                'Reason': self.error_desc
+            }
+        smtp_valid = await self.smtp_check(f'nonexistent@{domain}', mx_servers)
+        if smtp_valid and domain != "gmail.com":
+            self.validate_emails[id].append(email)
+            try:
+                with open('catch_all_domains.csv', 'a', newline='') as csvfile:
+                    fieldnames = ['domain']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writerow({'domain': domain})
+            except Exception:
+                pass
+            self.catch_all_domains.add(domain)
+            return {
+                'email': email,
+                'valid': True,
+                'reason': 'Valid email',
+                'catch_all': True
+            }
+        self.validate_emails[id].append(email)
 
-        return self._result(email, True, 'Valid email', domain, catch_all=True)
-
-    async def _catch_all_check(self, domain, mx_servers):
-        if domain == "gmail.com":
-            return False
-        return await self.smtp_check(f'nonexistent@{domain}', mx_servers)
-
-    def _result(self, email, valid, reason, domain, catch_all=None):
         return {
             'email': email,
-            'valid': valid,
-            'reason': reason,
-            'catch_all': catch_all if catch_all is not None else (domain in self.catch_all_domains),
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'error': self.error_desc
+            'valid': True,
+            'reason': 'Valid email',
+            'catch_all': domain in self.catch_all_domains
         }
 
     async def process_batch(self, emails, ids):
-        tasks = [self.verify_email(email, ids[i]) for i, email in enumerate(emails)]
+        tasks = [self.verify_email(email,ids[i]) for i, email in enumerate(emails)]
         return await asyncio.gather(*tasks)
 
 def main(input_file='emails.csv', output_file='results.csv'):
-    verifier = EmailVerifier(
-        concurrency=20,  # Reduced concurrency for AWS limits
-        smtp_port=587    # Explicitly use port 587
-    )
-
-    with open(input_file, 'r', encoding='utf-8') as f:
+    verifier = EmailVerifier(concurrency=50)
+    emails = []
+    ids = []
+    with open(input_file, 'r',encoding='utf-8') as f:
         reader = csv.reader(f)
-        rows = [row for row in reader if row]
-        emails = [row[0].strip() for row in rows]
-        ids = [row[1] if len(row) > 1 else 0 for row in rows]
-
+        for row in reader:
+            if not row:
+                continue
+            emails.append(row[0].strip())
+            ids.append(row[1] if len(row) > 1 else 0)
     results = []
-    batch_size = 50  # Reduced batch size for stability
+    batch_size = 100
+    start_time = time.time()
     loop = asyncio.get_event_loop()
 
     for i in tqdm(range(0, len(emails), batch_size)):
         batch_emails = emails[i:i+batch_size]
         batch_ids = ids[i:i+batch_size]
         try:
-            batch_results = loop.run_until_complete(
-                verifier.process_batch(batch_emails, batch_ids)
-            )
+            batch_results = loop.run_until_complete(verifier.process_batch(batch_emails, batch_ids))
             results.extend(batch_results)
         except Exception as e:
-            logging.error(f"Batch error: {str(e)}")
+            logging.error(f"Error processing batch: {e}")
 
-    with open(output_file, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['email', 'valid', 'reason', 'catch_all', 'timestamp', 'error'])
+
+    with open(output_file, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['email', 'valid', 'reason', 'catch_all','timestamp','Reason'])
         writer.writeheader()
         writer.writerows(results)
 
+    logging.info(f"Processed {len(emails)} emails in {time.time()-start_time:.2f} seconds")
     return verifier.validate_emails
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
     main()
