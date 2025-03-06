@@ -31,6 +31,7 @@ PATTERNS = [
 ]
 
 client = MongoClient('mongodb://developer:ah6M6vIz52YYJzy1@3.109.96.163:27017/e-finder?authSource=e-finder&readPreference=primary&serverSelectionTimeoutMS=20000&appname=mongosh%201.6.1&directConnection=true&ssl=false')
+print("Connected to MongoDB")
 db = client["e-finder"]
 users = db["users"]
 company = db["company"]
@@ -73,7 +74,7 @@ for skip in range(0, total_docs, 100):
                 "business_email": {"$exists": False},
                 "$or": [
                     {"v6": {"$exists": False}},
-                    {"v6": index}
+                    {"v6": index+1}
                 ]
             }},
             {"$sample": {"size": 100}}
