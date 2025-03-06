@@ -95,7 +95,13 @@ for skip in range(0, total_docs, 100):
                             {"$set": {"business_email": emails[ids[i]][0], "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
                         )
                     )
-
+                elif i < len(ids) and not emails[ids[i]][0]:
+                    updates.append(
+                        UpdateOne(
+                            {"_id": ObjectId(ids[i])},
+                            {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                        )
+                    )
             # Execute bulk updates
             if updates:
                 db["users"].bulk_write(updates)
