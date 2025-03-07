@@ -64,7 +64,7 @@ def get_pattern_email(dataset,index=0):
             create_patterns(firstName, LastName, companyDomain, index,data.get("_id"))
 
 
-index =0
+index =1
 total_docs = 300000
 for skip in range(0, total_docs, 100):
     try:
@@ -74,7 +74,7 @@ for skip in range(0, total_docs, 100):
                 "business_email": {"$exists": False},
                 "$or": [
                     {"v6": {"$exists": False}},
-                    {"v6": index+1}
+                    {"v6": index}
                 ]
             }},
             {"$sample": {"size": 100}}
