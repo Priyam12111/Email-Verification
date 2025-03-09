@@ -64,65 +64,68 @@ def get_pattern_email(dataset,index=0):
             create_patterns(firstName, LastName, companyDomain, index,data.get("_id"))
 
 
-index =1
-total_docs = 300000
-for skip in range(0, total_docs, 100):
-    try:
-        open('emails.csv', 'w').close() #clear the file
-        data = list(users.aggregate([
-            {"$match": {
-                "business_email": {"$exists": False},
-                "$or": [
-                    {"v6": {"$exists": False}},
-                    {"v6": index}
-                ]
-            }},
-            {"$sample": {"size": 100}}
-        ]))
-        if data:
-            get_pattern_email(data,index)
-            emails = main()
-            user_ids = [user["_id"] for user in data]
-            status = [False] * len(PATTERNS)
-            status[index] = True
-            updates = []
-            for i, user in enumerate(data):
-                ids = list(emails.keys())
-                if i < len(ids) and emails[ids[i]][0]:  # Check if email is valid and exists
-                    print(f"Updating user {ObjectId(ids[i])} with email {emails[ids[i]][0]}")
-                    updates.append(
-                        UpdateOne(
-                            {"_id": ObjectId(ids[i])},
-                            {"$set": {"business_email": emails[ids[i]][0], "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+for index in range(2, len(PATTERNS)):
+    total_docs = 400000
+    for skip in range(0, total_docs, 100):
+        try:
+            open('emails.csv', 'w').close() #clear the file
+            data = list(users.aggregate([
+                {"$match": {
+                    "business_email": {"$exists": False},
+                    "$or": [
+                        {"v6": {"$exists": False}},
+                        {"v6": index}
+                    ]
+                }},
+                {"$sample": {"size": 100}}
+            ]))
+            if data:
+                get_pattern_email(data,index)
+                emails = main()
+                user_ids = [user["_id"] for user in data]
+                status = [False] * len(PATTERNS)
+                status[index] = True
+                updates = []
+                for i, user in enumerate(data):
+                    ids = list(emails.keys())
+                    if i < len(ids) and emails[ids[i]][0]:  # Check if email is valid and exists
+                        print(f"Updating user {ObjectId(ids[i])} with email {emails[ids[i]][0]}")
+                        updates.append(
+                            UpdateOne(
+                                {"_id": ObjectId(ids[i])},
+                                {"$set": {"business_email": emails[ids[i]][0], "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                            )
                         )
-                    )
-                elif i < len(ids) and not emails[ids[i]][0]:
-                    updates.append(
-                        UpdateOne(
-                            {"_id": ObjectId(ids[i])},
-                            {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                    elif i < len(ids) and not emails[ids[i]][0]:
+                        updates.append(
+                            UpdateOne(
+                                {"_id": ObjectId(ids[i])},
+                                {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                            )
                         )
-                    )
-            # Execute bulk updates
-            if updates:
-                db["users"].bulk_write(updates)
+                # Execute bulk updates
+                if updates:
+                    db["users"].bulk_write(updates)
 
-            # Update v6 field correctly
-            try:
-                users.update_many(
-                    {
-                        "$or": [
-                            {"v6": {"$exists": False}},
-                            {"v6": index}
-                        ],
-                        "_id": {"$in": [ObjectId(user_id) for user_id in user_ids]}
-                    },
-                    {
-                        "$inc": {"v6": 1},  # Increments v6
-                        "$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    }
-            )
-            except Exception as e:
-                print(f"An error occurred: {e}")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+                # Update v6 field correctly
+                try:
+                    users.update_many(
+                        {
+                            "$or": [
+                                {"v6": {"$exists": False}},
+                                {"v6": index}
+                            ],
+                            "_id": {"$in": [ObjectId(user_id) for user_id in user_ids]}
+                        },
+                        {
+                            "$inc": {"v6": 1},  # Increments v6
+                            "$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                        }
+                )
+                except Exception as e:
+                    print(f"An error occurred: {e}")
+            else:
+                print("No more users to process.")
+                break
+        except Exception as e:
+            print(f"An error occurred: {e}")
