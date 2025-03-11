@@ -100,7 +100,7 @@ class EmailVerifier:
             return True
         self.domain_rates[domain]+=1
         if (self.domain_rates[domain]) > 5:
-            await asyncio.sleep(60)
+            time.sleep(60)
             logging.info(f"Sleeping for 1 second due to high rate of {self.domain_rates[domain]} emails per second to {domain}.")
             self.domain_rates[domain]=0
         for priority, host in mx_servers:
@@ -131,7 +131,7 @@ class EmailVerifier:
                     with open('blocked_domains.csv','a') as f:
                         f.write(f"{domain}\n")
                     await logging.info(f"Sleeping for 5 minutes due to blocked domain {domain}.")
-                    await asyncio.sleep(300)
+                    time.sleep(300)
                 return False
         return False
     async def verify_email(self, email,id):

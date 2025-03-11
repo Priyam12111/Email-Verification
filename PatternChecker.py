@@ -64,20 +64,26 @@ def get_pattern_email(dataset,index=0):
             create_patterns(firstName, LastName, companyDomain, index,data.get("_id"))
 
 
-for index in range(2, len(PATTERNS)):
-    total_docs = 400000
+for index in range(len(PATTERNS)):
+    total_docs = 600000
     for skip in range(0, total_docs, 100):
         try:
             open('emails.csv', 'w').close() #clear the file
             data = list(users.aggregate([
                 {"$match": {
-                    "$or": [
-                        { "business_email": { "$exists": False } },
-                        { "business_email": { "$exists": True, "$in": ["", None] } }
-                    ],
-                    "$or": [
-                        {"v6": {"$exists": False}},
-                        {"v6": index}
+                    "$and": [
+                        {
+                            "$or": [
+                                {"business_email": {"$exists": False}},
+                                {"business_email": {"$in": ["", None]}}
+                            ]
+                        },
+                        {
+                            "$or": [
+                                {"v6": {"$exists": False}},
+                                {"v6": index}
+                            ]
+                        }
                     ]
                 }},
                 {"$sample": {"size": 100}}
