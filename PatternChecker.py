@@ -71,7 +71,10 @@ for index in range(2, len(PATTERNS)):
             open('emails.csv', 'w').close() #clear the file
             data = list(users.aggregate([
                 {"$match": {
-                    "business_email": {"$exists": False},
+                    "$or": [
+                        { "business_email": { "$exists": False } },
+                        { "business_email": { "$exists": True, "$in": ["", None] } }
+                    ],
                     "$or": [
                         {"v6": {"$exists": False}},
                         {"v6": index}
