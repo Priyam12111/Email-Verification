@@ -24,7 +24,7 @@ logging.basicConfig(filename='email_verifier.log', level=logging.INFO,
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$')
 
 class EmailVerifier:
-    def __init__(self, concurrency=2, timeout=15, smtp_port=25):
+    def __init__(self, concurrency=2, timeout=30, smtp_port=25):
         self.resolver = aiodns.DNSResolver()
         self.timeout = timeout
         self.smtp_port = smtp_port
@@ -100,8 +100,8 @@ class EmailVerifier:
             return True
         self.domain_rates[domain]+=1
         if (self.domain_rates[domain]) > 5:
-            time.sleep(60)
-            logging.info(f"Sleeping for 1 second due to high rate of {self.domain_rates[domain]} emails per second to {domain}.")
+            # time.sleep(60)
+            # logging.info(f"Sleeping for 1 second due to high rate of {self.domain_rates[domain]} emails per second to {domain}.")
             self.domain_rates[domain]=0
         for priority, host in mx_servers:
             try:
@@ -210,6 +210,7 @@ class EmailVerifier:
         tasks = [self.verify_email(email,ids[i]) for i, email in enumerate(emails)]
         return await asyncio.gather(*tasks)
 
+
 def main(input_file='emails.csv', output_file='results.csv'):
     verifier = EmailVerifier(concurrency=50)
     emails = []
@@ -244,5 +245,32 @@ def main(input_file='emails.csv', output_file='results.csv'):
     logging.info(f"Processed {len(emails)} emails in {time.time()-start_time:.2f} seconds")
     return verifier.validate_emails
 
+def check_emails(emails, ids=None, output_file=None):
+    verifier = EmailVerifier(concurrency=50)
+    ids = ids or [0] * len(emails)  # Default IDs if not provided
+    
+    results = []
+    batch_size = 100
+    start_time = time.time()
+    loop = asyncio.get_event_loop()
+
+    for i in tqdm(range(0, len(emails), batch_size)):
+        batch_emails = emails[i:i+batch_size]
+        batch_ids = ids[i:i+batch_size]
+        try:
+            batch_results = loop.run_until_complete(verifier.process_batch(batch_emails, batch_ids))
+            results.extend(batch_results)
+        except Exception as e:
+            logging.error(f"Error processing batch: {e}")
+
+    # Optional CSV output
+    if output_file:
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['email', 'valid', 'reason', 'catch_all','timestamp','Reason'])
+            writer.writeheader()
+            writer.writerows(results)
+
+    logging.info(f"Processed {len(emails)} emails in {time.time()-start_time:.2f} seconds")
+    return results  # Return results array instead of writing to file
 if __name__ == '__main__':
     main()
