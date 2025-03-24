@@ -67,7 +67,7 @@ def get_pattern_email(dataset,index=0):
 for index in range(len(PATTERNS)):
     total_docs = users.count_documents({"$and": [{"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]}, {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}]})
     print(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
-    for skip in range(0, total_docs, 100):
+    for skip in range(0, total_docs, 50):
         try:
             open('emails.csv', 'w').close() #clear the file
             data = list(users.aggregate([
@@ -87,7 +87,7 @@ for index in range(len(PATTERNS)):
                         }
                     ]
                 }},
-                {"$sample": {"size": 100}}
+                {"$sample": {"size": 50}}
             ]))
             if data:
                 get_pattern_email(data,index)
