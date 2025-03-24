@@ -24,7 +24,7 @@ logging.basicConfig(filename='email_verifier.log', level=logging.INFO,
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$')
 
 class EmailVerifier:
-    def __init__(self, concurrency=2, timeout=30, smtp_port=25):
+    def __init__(self, concurrency=2, timeout=120, smtp_port=25):
         self.resolver = aiodns.DNSResolver()
         self.timeout = timeout
         self.smtp_port = smtp_port
