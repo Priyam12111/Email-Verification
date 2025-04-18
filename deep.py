@@ -117,7 +117,7 @@ class EmailVerifier:
                         self.catch_all_domains.add(domain)
                         return True
             except Exception as e:
-                logging.error(f"SMTP check error for {host}: {e}")
+                logging.error(f"SMTP check error for {email} on {host}: {e}")
                 self.error_desc = str(e)
                 if "4.2.1" in self.error_desc:
                     self.blocked_domains.add(domain)
