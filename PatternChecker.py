@@ -79,7 +79,7 @@ for index in range(len(PATTERNS)):
     
     print(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
     
-    for skip in range(0, total_docs, 50):
+    for skip in range(0, total_docs, 500):
         try:
             data = list(users.aggregate([
                 {"$match": {
@@ -88,7 +88,7 @@ for index in range(len(PATTERNS)):
                         {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}
                     ]
                 }},
-                {"$sample": {"size": 50}}
+                {"$sample": {"size": 500}}
             ]))
 
             if not data:
