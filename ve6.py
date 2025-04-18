@@ -214,7 +214,7 @@ class EmailVerifier:
 def main(input_file='emails.csv', output_file='results.csv'):
     """Main function to read emails from a CSV file, verify them, and write results to another CSV file."""
     
-    verifier = EmailVerifier(concurrency=30)
+    verifier = EmailVerifier(concurrency=1000)
     emails = []
     ids = []
     with open(input_file, 'r',encoding='utf-8') as f:
@@ -225,7 +225,7 @@ def main(input_file='emails.csv', output_file='results.csv'):
             emails.append(row[0].strip())
             ids.append(row[1] if len(row) > 1 else 0)
     results = []
-    batch_size = 30
+    batch_size = 1000
     start_time = time.time()
     loop = asyncio.get_event_loop()
 
@@ -247,11 +247,11 @@ def main(input_file='emails.csv', output_file='results.csv'):
     return verifier.validate_emails
 
 def check_emails(emails, ids=None, output_file=None):
-    verifier = EmailVerifier(concurrency=30)
+    verifier = EmailVerifier(concurrency=1000)
     ids = ids or [0] * len(emails)  # Default IDs if not provided
     
     results = []
-    batch_size = 30
+    batch_size = 1000
     start_time = time.time()
     loop = asyncio.get_event_loop()
 
@@ -273,5 +273,6 @@ def check_emails(emails, ids=None, output_file=None):
 
     logging.info(f"Processed {len(emails)} emails in {time.time()-start_time:.2f} seconds")
     return results  # Return results array instead of writing to file
+
 if __name__ == '__main__':
     print(check_emails(["allib@mckinstry.com"]))
