@@ -2,7 +2,7 @@ from datetime import datetime
 import traceback
 
 from bson import ObjectId
-from deep import main
+from deep import main,logging
 from pymongo import MongoClient, UpdateOne
 
 PATTERNS = [
@@ -31,7 +31,7 @@ PATTERNS = [
 ]
 
 client = MongoClient('mongodb://developer:ah6M6vIz52YYJzy1@3.109.96.163:27017/e-finder?authSource=e-finder&readPreference=primary&serverSelectionTimeoutMS=20000&appname=mongosh%201.6.1&directConnection=true&ssl=false')
-print("Connected to MongoDB")
+logging.info("Connected to MongoDB")
 db = client["e-finder"]
 users = db["users"]
 company = db["company"]
@@ -49,7 +49,7 @@ def generate_email_patterns(firstName, lastName, domain, index, user_id):
         ).lower().replace('"', '').replace("(", "").replace(")", "")
         patterns.append((email, str(user_id)))
     except Exception as e:
-        print(f"Error generating pattern: {e}")
+        logging.info(f"Error generating pattern: {e}")
     return patterns
 
 def process_users_dataset(dataset, index):
@@ -77,7 +77,7 @@ for index in range(len(PATTERNS)):
         {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}
     ]})
     
-    print(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
+    logging.info(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
     
     for skip in range(0, total_docs, 500):
         try:
@@ -92,7 +92,7 @@ for index in range(len(PATTERNS)):
             ]))
 
             if not data:
-                print("No more users to process.")
+                logging.info("No more users to process.")
                 break
 
             # Generate email patterns in memory
@@ -130,15 +130,15 @@ for index in range(len(PATTERNS)):
             # Execute bulk updates
             if updates:
                 db["users"].bulk_write(updates)
-                print(f"Updated {len(updates)} users with valid emails")
+                logging.info(f"Updated {len(updates)} users with valid emails")
 
             # Update v6 field for processed users
             update_v6_result = users.update_many(
                 {"_id": {"$in": [ObjectId(uid) for uid in user_ids_list]}},
                 {"$inc": {"v6": 1},"$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
             )
-            print(f"Updated v6 field for {update_v6_result.modified_count} users")
+            logging.info(f"Updated v6 field for {update_v6_result.modified_count} users")
 
         except Exception as e:
-            print(f"An error occurred: {e}")
+            logging.info(f"An error occurred: {e}")
             traceback.print_exc()
