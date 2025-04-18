@@ -1,9 +1,8 @@
-import csv
 from datetime import datetime
 import traceback
 
 from bson import ObjectId
-from ve6 import main
+from deep import main
 from pymongo import MongoClient, UpdateOne
 
 PATTERNS = [
@@ -37,110 +36,108 @@ db = client["e-finder"]
 users = db["users"]
 company = db["company"]
 
-
-def create_patterns(firstName,lastName,domain,index,user_id):
+def generate_email_patterns(firstName, lastName, domain, index, user_id):
     patterns = []
-    f = open('emails.csv', 'a', newline='',encoding='utf-8')
-    pattern =  PATTERNS[index]
     try:
-        implied = pattern.format(first=firstName,last=lastName,domain=domain,first_initial=firstName[0],last_initial=lastName[0]).lower().replace('"','').replace("(","").replace(")","")
-    except Exception:
-        implied = ["None"]
-    patterns.append(implied)
-    f.write(f'{implied},{user_id}\n')
-
+        pattern = PATTERNS[index]
+        email = pattern.format(
+            first=firstName,
+            last=lastName,
+            domain=domain,
+            first_initial=firstName[0] if firstName else '',
+            last_initial=lastName[0] if lastName else ''
+        ).lower().replace('"', '').replace("(", "").replace(")", "")
+        patterns.append((email, str(user_id)))
+    except Exception as e:
+        print(f"Error generating pattern: {e}")
     return patterns
 
-def get_pattern_email(dataset,index=0):
+def process_users_dataset(dataset, index):
+    email_user_pairs = []
     for data in dataset:
-        fullName = data.get("fullName").split(" ")
-        if len(fullName) < 1:
-            continue  # Skip invalid names
-        firstName = fullName[0]
-        LastName = fullName[-1]  if len(fullName) > 1 else ""
+        fullName = data.get("fullName", "").split(" ")
+        firstName = fullName[0] if len(fullName) > 0 else ""
+        lastName = fullName[-1] if len(fullName) > 1 else ""
         refCompanyId = data.get("refCompanyId")
+        
         comp = company.find_one({"_id": refCompanyId}) if refCompanyId else None
         companyDomain = comp.get("email_domain") if comp else None
+        
         if companyDomain:
-            create_patterns(firstName, LastName, companyDomain, index,data.get("_id"))
-
+            pairs = generate_email_patterns(
+                firstName, lastName, companyDomain, 
+                index, data.get("_id")
+            )
+            email_user_pairs.extend(pairs)
+    return email_user_pairs
 
 for index in range(len(PATTERNS)):
-    total_docs = users.count_documents({"$and": [{"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]}, {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}]})
+    total_docs = users.count_documents({"$and": [
+        {"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]},
+        {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}
+    ]})
+    
     print(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
-    for skip in range(0, total_docs, 1000):
+    
+    for skip in range(0, total_docs, 50):
         try:
-            open('emails.csv', 'w').close() #clear the file
             data = list(users.aggregate([
                 {"$match": {
                     "$and": [
-                        {
-                            "$or": [
-                                {"business_email": {"$exists": False}},
-                                {"business_email": {"$in": ["", None]}}
-                            ]
-                        },
-                        {
-                            "$or": [
-                                {"v6": {"$exists": False}},
-                                {"v6": index}
-                            ]
-                        }
+                        {"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]},
+                        {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}
                     ]
                 }},
-                {"$sample": {"size": 1000}}
+                {"$sample": {"size": 50}}
             ]))
-            if data:
-                get_pattern_email(data,index)
-                emails = main()
-                user_ids = [user["_id"] for user in data]
-                status = [False] * len(PATTERNS)
-                status[index] = True
-                updates = []
-                for i, user in enumerate(data):
-                    ids = list(emails.keys())
-                    if i < len(ids) and emails[ids[i]][0]:  # Check if email is valid and exists
-                        print(f"Updating user {ObjectId(ids[i])} with email {emails[ids[i]][0]}")
-                        updates.append(
-                            UpdateOne(
-                                {"_id": ObjectId(ids[i])},
-                                {"$set": {"business_email": emails[ids[i]][0], "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
-                            )
-                        )
-                    elif i < len(ids) and not emails[ids[i]][0]:
-                        try:
-                            updates.append(
-                                UpdateOne(
-                                    {"_id": ObjectId(ids[i])},
-                                    {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
-                                )
-                            )
-                        except Exception as e:
-                            pass
-                # Execute bulk updates
-                if updates:
-                    db["users"].bulk_write(updates)
 
-                # Update v6 field correctly
-                try:
-                    users.update_many(
-                        {
-                            "$or": [
-                                {"v6": {"$exists": False}},
-                                {"v6": index}
-                            ],
-                            "_id": {"$in": [ObjectId(user_id) for user_id in user_ids]}
-                        },
-                        {
-                            "$inc": {"v6": 1},  # Increments v6
-                            "$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                        }
-                )
-                except Exception as e:
-                    print(f"An error occurred: {e}")
-            else:
+            if not data:
                 print("No more users to process.")
                 break
+
+            # Generate email patterns in memory
+            email_user_pairs = process_users_dataset(data, index)
+            
+            if not email_user_pairs:
+                continue
+
+            # Split into separate lists for processing
+            emails_list = [pair[0] for pair in email_user_pairs]
+            user_ids_list = [pair[1] for pair in email_user_pairs]
+
+            # Process emails through verification system
+            verification_results = main(emails_list, user_ids_list)
+            # Prepare bulk operations
+            updates = []
+            valid_user_ids = []
+            
+            user_id = verification_results['id']
+            valid_email = verification_results["email"]
+            if user_id and valid_email:
+                if valid_email:
+                    updates.append(
+                        UpdateOne(
+                            {"_id": ObjectId(user_id)},
+                            {"$set": {
+                                "business_email": valid_email,
+                                "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }}
+                        )
+                    )
+                    valid_user_ids.append(user_id)
+
+            # Execute bulk updates
+            if updates:
+                db["users"].bulk_write(updates)
+                print(f"Updated {len(updates)} users with valid emails")
+
+            # Update v6 field for processed users
+            update_v6_result = users.update_many(
+                {"_id": {"$in": [ObjectId(uid) for uid in user_ids_list]}},
+                {"$inc": {"v6": 1},"$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+            )
+            print(f"Updated v6 field for {update_v6_result.modified_count} users")
+
         except Exception as e:
             print(f"An error occurred: {e}")
             traceback.print_exc()
