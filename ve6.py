@@ -112,7 +112,7 @@ class EmailVerifier:
                     if code != 250:
                         await smtp.helo()
                     
-                    await smtp.mail(f"no-reply@{domain}") 
+                    await smtp.mail(f"priyam133@{domain}") 
                     await asyncio.sleep(1)
                 
                     code, _ = await smtp.rcpt(email)
@@ -131,7 +131,7 @@ class EmailVerifier:
                     with open('blocked_domains.csv','a') as f:
                         f.write(f"{domain}\n")
                     await logging.info(f"Sleeping for 5 minutes due to blocked domain {domain}.")
-                    time.sleep(300)
+                    await asyncio.sleep(random.uniform(0.5, 1.5)*30)
                 return False
         return False
     async def verify_email(self, email,id):
@@ -212,7 +212,9 @@ class EmailVerifier:
 
 
 def main(input_file='emails.csv', output_file='results.csv'):
-    verifier = EmailVerifier(concurrency=50)
+    """Main function to read emails from a CSV file, verify them, and write results to another CSV file."""
+    
+    verifier = EmailVerifier(concurrency=100)
     emails = []
     ids = []
     with open(input_file, 'r',encoding='utf-8') as f:
@@ -236,7 +238,6 @@ def main(input_file='emails.csv', output_file='results.csv'):
         except Exception as e:
             logging.error(f"Error processing batch: {e}")
 
-
     with open(output_file, 'a', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=['email', 'valid', 'reason', 'catch_all','timestamp','Reason'])
         writer.writeheader()
@@ -246,7 +247,7 @@ def main(input_file='emails.csv', output_file='results.csv'):
     return verifier.validate_emails
 
 def check_emails(emails, ids=None, output_file=None):
-    verifier = EmailVerifier(concurrency=50)
+    verifier = EmailVerifier(concurrency=100)
     ids = ids or [0] * len(emails)  # Default IDs if not provided
     
     results = []
@@ -273,4 +274,4 @@ def check_emails(emails, ids=None, output_file=None):
     logging.info(f"Processed {len(emails)} emails in {time.time()-start_time:.2f} seconds")
     return results  # Return results array instead of writing to file
 if __name__ == '__main__':
-    main()
+    print(check_emails(["allib@mckinstry.com"]))

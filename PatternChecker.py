@@ -1,5 +1,6 @@
 import csv
 from datetime import datetime
+import traceback
 
 from bson import ObjectId
 from ve6 import main
@@ -67,7 +68,7 @@ def get_pattern_email(dataset,index=0):
 for index in range(len(PATTERNS)):
     total_docs = users.count_documents({"$and": [{"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]}, {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}]})
     print(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
-    for skip in range(0, total_docs, 50):
+    for skip in range(0, total_docs, 100):
         try:
             open('emails.csv', 'w').close() #clear the file
             data = list(users.aggregate([
@@ -87,7 +88,7 @@ for index in range(len(PATTERNS)):
                         }
                     ]
                 }},
-                {"$sample": {"size": 50}}
+                {"$sample": {"size": 100}}
             ]))
             if data:
                 get_pattern_email(data,index)
@@ -107,12 +108,15 @@ for index in range(len(PATTERNS)):
                             )
                         )
                     elif i < len(ids) and not emails[ids[i]][0]:
-                        updates.append(
-                            UpdateOne(
-                                {"_id": ObjectId(ids[i])},
-                                {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                        try:
+                            updates.append(
+                                UpdateOne(
+                                    {"_id": ObjectId(ids[i])},
+                                    {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                                )
                             )
-                        )
+                        except Exception as e:
+                            pass
                 # Execute bulk updates
                 if updates:
                     db["users"].bulk_write(updates)
@@ -139,3 +143,4 @@ for index in range(len(PATTERNS)):
                 break
         except Exception as e:
             print(f"An error occurred: {e}")
+            traceback.print_exc()
