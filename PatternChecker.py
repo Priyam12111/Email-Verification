@@ -114,18 +114,26 @@ for index in range(len(PATTERNS)):
             user_id = verification_results['id']
             valid_email = verification_results["email"]
             if user_id and valid_email:
-                if valid_email:
+                updates.append(
+                    UpdateOne(
+                        {"_id": ObjectId(user_id)},
+                        {"$set": {
+                            "business_email": valid_email,
+                            "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }}
+                    )
+                )
+                valid_user_ids.append(user_id)
+            else:
+                try:
                     updates.append(
                         UpdateOne(
                             {"_id": ObjectId(user_id)},
-                            {"$set": {
-                                "business_email": valid_email,
-                                "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }}
+                            {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
                         )
                     )
-                    valid_user_ids.append(user_id)
-
+                except Exception as e:
+                    pass
             # Execute bulk updates
             if updates:
                 db["users"].bulk_write(updates)
