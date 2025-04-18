@@ -122,7 +122,7 @@ class EmailVerifier:
                 if "4.2.1" in self.error_desc:
                     self.blocked_domains.add(domain)
                     self.catch_all_domains.add(domain)
-                    await logging.info(f"Sleeping for 5 minutes due to blocked domain {domain}.")
+                    logging.info(f"Sleeping for 5 minutes due to blocked domain {domain}.")
                     await asyncio.sleep(random.uniform(0.5, 1.5)*30)
                 return False
         return False
