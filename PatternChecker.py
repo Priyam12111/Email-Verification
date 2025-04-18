@@ -123,17 +123,10 @@ for index in range(len(PATTERNS)):
                         }}
                     )
                 )
+                if user_id in user_ids_list:
+                    user_ids_list.remove(user_id)
                 valid_user_ids.append(user_id)
-            else:
-                try:
-                    updates.append(
-                        UpdateOne(
-                            {"_id": ObjectId(user_id)},
-                            {"$set": {"modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
-                        )
-                    )
-                except Exception as e:
-                    pass
+
             # Execute bulk updates
             if updates:
                 db["users"].bulk_write(updates)
@@ -142,7 +135,7 @@ for index in range(len(PATTERNS)):
             # Update v6 field for processed users
             update_v6_result = users.update_many(
                 {"_id": {"$in": [ObjectId(uid) for uid in user_ids_list]}},
-                {"$inc": {"v6": 1},"$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
+                {"$inc": {"v6": 1},"$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
             )
             print(f"Updated v6 field for {update_v6_result.modified_count} users")
 
