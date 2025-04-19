@@ -106,7 +106,7 @@ class EmailVerifier:
                     if code != 250:
                         await smtp.helo()
                     
-                    await smtp.mail(f"priyam133@{domain}") 
+                    await smtp.mail("") 
                     await asyncio.sleep(1)
                 
                     code, _ = await smtp.rcpt(email)
