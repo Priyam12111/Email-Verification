@@ -1,8 +1,0 @@
-email,valid,reason,catch_all,timestamp,Reason
-priyamtomar012@gmail.com,False,Mailbox not found,False,2025-03-05 15:13:19,Timed out connecting to gmail-smtp-in.l.google.com on port 465
-priyam@gmail.com,False,Mailbox not found,False,2025-03-05 15:13:19,Timed out connecting to gmail-smtp-in.l.google.com on port 465
-shubham123123@acadecraft.com,False,Mailbox not found,False,2025-03-05 15:13:19,Timed out connecting to aspmx.l.google.com on port 465
-email,valid,reason,catch_all,timestamp,Reason
-priyamtomar012@gmail.com,True,Valid email,False,,
-priyam@gmail.com,True,Valid email,False,,
-shubham123123@acadecraft.com,False,Mailbox not found,False,2025-03-05 15:48:41,"(550, ""5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser d9443c01a7336-22350291be5si213525205ad.281 - gsmtp"", 'shubham123123@acadecraft.com')"

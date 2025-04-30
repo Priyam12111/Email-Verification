@@ -204,7 +204,7 @@ class EmailVerifier:
 
 def main(sample_emails=[""], sample_ids=[""]):
     """Example usage without CSV file interactions"""
-
+    print(len(sample_emails), len(sample_ids))
     if sample_ids == [""]:
         sample_ids = [0]*len(sample_emails)
     if not sample_emails:
@@ -213,8 +213,7 @@ def main(sample_emails=[""], sample_ids=[""]):
     
     loop = asyncio.get_event_loop()
     results = loop.run_until_complete(verifier.process_batch(sample_emails, sample_ids))
-    for result in results:
-        print(f"Email:{result['valid']} - Reason: {result['reason']} {result['email']} - Valid: {result['valid']} - Reason: {result['reason']}")
-    return result
+    return results
+
 if __name__ == "__main__":
     main(["priyam133@me.com","shubham@acadecraft.com"], ["123", "456"])
