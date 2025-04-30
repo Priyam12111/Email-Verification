@@ -4,3 +4,5 @@ test.py
 /NR
 *.csv
 *.log
+/build
+fetch_domain.spec
