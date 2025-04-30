@@ -23,3 +23,6 @@ for index, row in df.iterrows():
     domain = process([{'name': row['Company']}])
     wrreplace('sample.csv', row['Company'], f"{row['Company']},{domain}")
     boxMap[row['Company']] = 1
+    with open('AllDomain.json', 'w') as file:
+        all_domains[row['Company']] = domain
+        json.dump(all_domains, file, indent=4)
