@@ -1,5 +1,5 @@
 import sys
-sys.path.append('D:\Email Verification\LocalVerification\APIs\company')
+sys.path.append('company')
 
 
 import pandas as pd
