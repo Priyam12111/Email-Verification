@@ -4,6 +4,7 @@ import traceback
 from bson import ObjectId
 from deep import main,logging
 from pymongo import MongoClient, UpdateOne
+from sanatize import clean_and_extract
 
 PATTERNS = [
     "{first}.{last}@{domain}",
@@ -55,20 +56,24 @@ def generate_email_patterns(firstName, lastName, domain, index, user_id):
 def process_users_dataset(dataset, index):
     email_user_pairs = []
     for data in dataset:
-        fullName = data.get("fullName", "").split(" ")
+        # fullName = data.get("fullName", "").split(" ")
+        fullName = clean_and_extract(data.get("fullName"))
+        fullName = fullName.replace('.', ' ').replace('_', ' ').split()
+
         firstName = fullName[0] if len(fullName) > 0 else ""
-        lastName = fullName[-1] if len(fullName) > 1 else ""
-        refCompanyId = data.get("refCompanyId")
-        
-        comp = company.find_one({"_id": refCompanyId}) if refCompanyId else None
-        companyDomain = comp.get("email_domain") if comp else None
-        
-        if companyDomain:
-            pairs = generate_email_patterns(
-                firstName, lastName, companyDomain, 
-                index, data.get("_id")
-            )
-            email_user_pairs.extend(pairs)
+        if firstName:
+            lastName = fullName[-1].rsplit('-', 1)[-1] if len(fullName) > 1 else ""
+            refCompanyId = data.get("refCompanyId")
+            
+            comp = company.find_one({"_id": refCompanyId}) if refCompanyId else None
+            companyDomain = comp.get("email_domain") if comp else None
+            
+            if companyDomain:
+                pairs = generate_email_patterns(
+                    firstName, lastName, companyDomain, 
+                    index, data.get("_id")
+                )
+                email_user_pairs.extend(pairs)
     return email_user_pairs
 
 for index in range(len(PATTERNS)):
