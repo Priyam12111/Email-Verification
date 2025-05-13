@@ -124,11 +124,30 @@ def clean_and_extract(name):
     # 8. Final trim
     name = name.strip()
     return name
-    
-    
+
+
+import idna
+
+def normalize_eai_email(email):
+    local_part, domain = email.split('@')
+    domain_ascii = idna.encode(domain).decode('ascii')
+    return f"{local_part}@{domain_ascii}"
+
+# Example: Unicode email
+email = "用户@例子.公司"
+normalized = normalize_eai_email(email)
+from email_validator import validate_email, EmailNotValidError
+
+try:
+    valid = validate_email(normalized, allow_smtputf8=True)
+    print("Valid email:", normalized, valid.email)
+except EmailNotValidError as e:
+    print("Invalid:", str(e))
+
+
 # Test examples
 # print(clean_and_extract("CHAYAN B. - CHRO - CDO XLRI IIM IIT"))  
-# print(clean_and_extract("Brittney Freeman M. Ed"))  
+print(clean_and_extract("Méi Yànyīng"))  
 # print(clean_and_extract("Victor Spotloe Jr. CSW"))  
 
 # Read input CSV and write to output CSV

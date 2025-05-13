@@ -5,6 +5,7 @@ from bson import ObjectId
 from deep import main,logging
 from pymongo import MongoClient, UpdateOne
 from sanatize import clean_and_extract
+from company import get_email_domain
 import re
 
 PATTERNS = [
@@ -46,9 +47,17 @@ def generate_email_patterns(firstName, lastName, domain, index, user_id):
             last_initial=lastName[0] if lastName else ''
         ).lower().replace('"', '').replace("(", "").replace(")", "")
         # Clean up invalid dot placements
-        email = re.sub(r'\.+', '.', email)           # Replace multiple dots with one
-        email = re.sub(r'\.@', '@', email)           # Remove trailing dot before @
-        email = email.strip('.')                     # Remove leading/trailing dots
+        # email = re.sub(r'\.+', '.', email)           # Replace multiple dots with one
+        # email = re.sub(r'\.@', '@', email)           # Remove trailing dot before @
+        # email = email.strip('.')                     # Remove leading/trailing dots
+        # Normalize multiple dots, dashes, or underscores
+        email = re.sub(r'[.\-_]+', lambda m: m.group(0)[0], email)  # Collapse repeats, keep only one
+
+        # Remove any of . - _ before @
+        email = re.sub(r'[.\-_]+@', '@', email)
+
+        # Strip special characters (., -, _) from beginning and end
+        email = email.strip('.-_')
         patterns.append((email, str(user_id)))
     except Exception as e:
         logging.info(f"Error generating pattern: {e}")
@@ -69,6 +78,7 @@ def process_users_dataset(dataset, index):
             # comp = company.find_one({"_id": refCompanyId}) if refCompanyId else None
             # companyDomain = comp.get("email_domain") if comp else None
             companyDomain = data.get("email_domain") if data else None
+            companyDomain = get_email_domain(companyDomain)
             
             if companyDomain:
                 pairs = generate_email_patterns(
