@@ -13,10 +13,8 @@ import aiosmtplib
 import random
 import csv
 
-
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
 
 logging.basicConfig(filename='email_verifier.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,9 +26,7 @@ class EmailVerifier:
         self.timeout = timeout
         self.smtp_port = smtp_port
         self.disposable_domains = self.load_disposable_domains()
-        # self.catch_all_domains = set()
         self.catch_all_domains = self.load_blocked_domains("catch_all_domains.csv")
-        # self.blocked_domains = set()
         self.blocked_domains = self.load_blocked_domains("blocked_domains.csv")
         self.mx_cache = {}
         self.smtp_semaphore = asyncio.Semaphore(concurrency)
@@ -49,6 +45,16 @@ class EmailVerifier:
         except Exception:
             return set(['tempmail.com', 'mailinator.com'])
 
+    def is_google_mx(self, mx_records):
+        google_hosts = {
+            'aspmx.l.google.com',
+            'alt1.aspmx.l.google.com',
+            'alt2.aspmx.l.google.com',
+            'alt3.aspmx.l.google.com',
+            'alt4.aspmx.l.google.com',
+        }
+        return any(host.lower().endswith('.google.com') or host.lower() in google_hosts for _, host in mx_records)
+
     async def check_syntax(self, email):
         if not EMAIL_REGEX.match(email):
             return False
@@ -61,7 +67,6 @@ class EmailVerifier:
         local, domain = parts
         if not local or not domain:
             return False
-        
         if domain.startswith('.') or domain.endswith('.') or '.' not in domain:
             return False
         return True
@@ -95,32 +100,35 @@ class EmailVerifier:
 
     async def smtp_check(self, email, mx_servers):
         domain = email.split('@')[1]
-        
+
         if domain in self.catch_all_domains:
             return True, "Domain already marked as catch-all"
 
         self.domain_rates[domain] += 1
         if self.domain_rates[domain] > 5:
-            self.domain_rates[domain] = 0  # Optional rate limiting logic
+            self.domain_rates[domain] = 0
 
         for priority, host in mx_servers:
             try:
                 async with self.smtp_semaphore:
-                    smtp = aiosmtplib.SMTP(hostname=host, port=self.smtp_port, timeout=self.timeout)
+                    # smtp = aiosmtplib.SMTP(hostname=host, port=self.smtp_port, timeout=self.timeout)
+                    smtp = aiosmtplib.SMTP(hostname=host, port=587, timeout=self.timeout, start_tls=True)
                     await smtp.connect()
 
                     code, _ = await smtp.ehlo()
                     if code != 250:
-                        await smtp.helo()  # fallback EHLO
+                        await smtp.helo()
 
-                    await smtp.mail("verifier@example.com")  # proper MAIL FROM
-                    await asyncio.sleep(1)  # small pause before RCPT
+                    await smtp.mail("verifier@example.com")
+                    await asyncio.sleep(1)
 
                     code, response = await smtp.rcpt(email)
                     await smtp.quit()
 
                     if code == 250:
-                        return True, "Valid recipient"
+                        if self.is_google_mx(mx_servers):
+                            return False, "Unverifiable — hosted on Google (ambiguous 250)"
+                        return True, "Verified via RCPT"
                     elif code == 550:
                         return False, "Mailbox not found"
                     elif code == 552:
@@ -130,7 +138,6 @@ class EmailVerifier:
                     elif code == 421:
                         return False, "Service not available"
                     elif code == 252:
-                        # 252 is ambiguous — may mean "cannot verify but will accept"
                         self.catch_all_domains.add(domain)
                         return True, "Possible catch-all (252)"
                     else:
@@ -140,12 +147,11 @@ class EmailVerifier:
                 self.error_desc = str(e)
                 logging.error(f"[SMTP ERROR] {email} @ {host}: {e}")
 
-                # Handle blocking
                 if "4.2.1" in self.error_desc:
                     self.blocked_domains.add(domain)
                     self.catch_all_domains.add(domain)
                     logging.warning(f"[Blocked] Sleeping due to rate limit on {domain}")
-                    await asyncio.sleep(random.uniform(15, 45))  # back-off strategy
+                    await asyncio.sleep(random.uniform(15, 45))
 
                 return False, f"SMTP exception: {str(e)}"
 
@@ -189,23 +195,23 @@ class EmailVerifier:
                 'timestamp': current_time
             }
 
-        # Step 1: Check if actual email exists
-        smtp_valid = await self.smtp_check(email, mx_servers)
+        smtp_valid, reason = await self.smtp_check(email, mx_servers)
         if smtp_valid:
             self.validate_emails[id].append(email)
             return {
                 'id': id,
                 'email': email,
                 'valid': True,
-                'reason': 'Valid email',
-                'catch_all': domain in self.catch_all_domains
+                'reason': reason,
+                'catch_all': domain in self.catch_all_domains,
+                'timestamp': current_time
             }
 
-        # Step 2: Check catch-all behavior only if email not valid and domain not already known
-        if domain not in self.catch_all_domains and domain != "gmail.com":
-            catch_all_test = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
-            catch_all_result = await self.smtp_check(catch_all_test, mx_servers)
+        is_google_hosted = self.is_google_mx(mx_servers)
 
+        if not is_google_hosted and domain not in self.catch_all_domains:
+            catch_all_test = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
+            catch_all_result, catch_reason = await self.smtp_check(catch_all_test, mx_servers)
             if catch_all_result:
                 self.catch_all_domains.add(domain)
                 return {
@@ -222,7 +228,7 @@ class EmailVerifier:
             'id': id,
             'email': email,
             'valid': False,
-            'reason': 'Mailbox not found',
+            'reason': reason,
             'catch_all': domain in self.catch_all_domains,
             'timestamp': current_time,
             'smtp_error': self.error_desc
@@ -238,22 +244,19 @@ class EmailVerifier:
             with open(filename, newline='', encoding='utf-8') as csvfile:
                 reader = csv.reader(csvfile)
                 for row in reader:
-                    if row:  # Avoid empty rows
-                        blocked.add(row[0].strip().lower())  # Assuming one domain per line
+                    if row:
+                        blocked.add(row[0].strip().lower())
         except FileNotFoundError:
             print(f"[Warning] File '{filename}' not found. No blocked domains loaded.")
         return blocked
 
-
 def main(sample_emails=[""], sample_ids=[""]):
-    """Example usage without CSV file interactions"""
     print(len(sample_emails), len(sample_ids))
     if sample_ids == [""]:
         sample_ids = [0]*len(sample_emails)
     if not sample_emails:
         return []
-    verifier = EmailVerifier(concurrency=1000)
-    
+    verifier = EmailVerifier(concurrency=50)
     loop = asyncio.get_event_loop()
     results = loop.run_until_complete(verifier.process_batch(sample_emails, sample_ids))
     return results
