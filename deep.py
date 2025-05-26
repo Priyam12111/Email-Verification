@@ -11,6 +11,7 @@ from collections import defaultdict
 import requests
 import aiosmtplib
 import random
+import csv
 
 
 if sys.platform == 'win32':
@@ -27,8 +28,10 @@ class EmailVerifier:
         self.timeout = timeout
         self.smtp_port = smtp_port
         self.disposable_domains = self.load_disposable_domains()
-        self.catch_all_domains = set()
-        self.blocked_domains = set()
+        # self.catch_all_domains = set()
+        self.catch_all_domains = self.load_blocked_domains("catch_all_domains.csv")
+        # self.blocked_domains = set()
+        self.blocked_domains = self.load_blocked_domains("blocked_domains.csv")
         self.mx_cache = {}
         self.smtp_semaphore = asyncio.Semaphore(concurrency)
         self.domain_rates = defaultdict(int)
@@ -92,46 +95,68 @@ class EmailVerifier:
 
     async def smtp_check(self, email, mx_servers):
         domain = email.split('@')[1]
+        
         if domain in self.catch_all_domains:
-            return True
+            return True, "Domain already marked as catch-all"
+
         self.domain_rates[domain] += 1
-        if (self.domain_rates[domain]) > 5:
-            self.domain_rates[domain] = 0
+        if self.domain_rates[domain] > 5:
+            self.domain_rates[domain] = 0  # Optional rate limiting logic
+
         for priority, host in mx_servers:
             try:
                 async with self.smtp_semaphore:
                     smtp = aiosmtplib.SMTP(hostname=host, port=self.smtp_port, timeout=self.timeout)
                     await smtp.connect()
+
                     code, _ = await smtp.ehlo()
                     if code != 250:
-                        await smtp.helo()
-                    
-                    await smtp.mail("") 
-                    await asyncio.sleep(1)
-                
-                    code, _ = await smtp.rcpt(email)
+                        await smtp.helo()  # fallback EHLO
+
+                    await smtp.mail("verifier@example.com")  # proper MAIL FROM
+                    await asyncio.sleep(1)  # small pause before RCPT
+
+                    code, response = await smtp.rcpt(email)
                     await smtp.quit()
+
                     if code == 250:
-                        return True
+                        return True, "Valid recipient"
+                    elif code == 550:
+                        return False, "Mailbox not found"
+                    elif code == 552:
+                        return False, "Mailbox full"
+                    elif code == 451:
+                        return False, "Temporary local problem"
+                    elif code == 421:
+                        return False, "Service not available"
                     elif code == 252:
+                        # 252 is ambiguous — may mean "cannot verify but will accept"
                         self.catch_all_domains.add(domain)
-                        return True
+                        return True, "Possible catch-all (252)"
+                    else:
+                        return False, f"Unhandled SMTP code {code}: {response.decode() if hasattr(response, 'decode') else response}"
+
             except Exception as e:
-                logging.error(f"SMTP check error for {email} on {host}: {e}")
                 self.error_desc = str(e)
+                logging.error(f"[SMTP ERROR] {email} @ {host}: {e}")
+
+                # Handle blocking
                 if "4.2.1" in self.error_desc:
                     self.blocked_domains.add(domain)
                     self.catch_all_domains.add(domain)
-                    logging.info(f"Sleeping for 5 minutes due to blocked domain {domain}.")
-                    await asyncio.sleep(random.uniform(0.5, 1.5)*30)
-                return False
-        return False
+                    logging.warning(f"[Blocked] Sleeping due to rate limit on {domain}")
+                    await asyncio.sleep(random.uniform(15, 45))  # back-off strategy
+
+                return False, f"SMTP exception: {str(e)}"
+
+        return False, "All MX servers failed"
 
     async def verify_email(self, email, id):
         parts = email.split('@')
         domain = parts[1] if len(parts) > 1 else ''
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+
         if not await self.check_syntax(email):
             return {
                 'id': id,
@@ -164,42 +189,60 @@ class EmailVerifier:
                 'timestamp': current_time
             }
 
+        # Step 1: Check if actual email exists
         smtp_valid = await self.smtp_check(email, mx_servers)
-        if not smtp_valid:
-            self.validate_emails[id].append(False)
-            return {
-                'id': id,
-                'email': email,
-                'valid': False,
-                'reason': 'Mailbox not found',
-                'catch_all': domain in self.catch_all_domains,
-                'timestamp': current_time,
-                'Reason': self.error_desc
-            }
-        smtp_valid = await self.smtp_check(f'nonexistent@{domain}', mx_servers)
-        if smtp_valid and domain != "gmail.com":
+        if smtp_valid:
             self.validate_emails[id].append(email)
-            self.catch_all_domains.add(domain)
             return {
                 'id': id,
                 'email': email,
                 'valid': True,
                 'reason': 'Valid email',
-                'catch_all': True
+                'catch_all': domain in self.catch_all_domains
             }
-        self.validate_emails[id].append(email)
 
+        # Step 2: Check catch-all behavior only if email not valid and domain not already known
+        if domain not in self.catch_all_domains and domain != "gmail.com":
+            catch_all_test = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
+            catch_all_result = await self.smtp_check(catch_all_test, mx_servers)
+
+            if catch_all_result:
+                self.catch_all_domains.add(domain)
+                return {
+                    'id': id,
+                    'email': email,
+                    'valid': False,
+                    'reason': 'Invalid email (catch-all)',
+                    'catch_all': True,
+                    'timestamp': current_time
+                }
+
+        self.validate_emails[id].append(False)
         return {
             'id': id,
             'email': email,
-            'valid': True,
-            'reason': 'Valid email',
-            'catch_all': domain in self.catch_all_domains
+            'valid': False,
+            'reason': 'Mailbox not found',
+            'catch_all': domain in self.catch_all_domains,
+            'timestamp': current_time,
+            'smtp_error': self.error_desc
         }
 
     async def process_batch(self, emails, ids):
         tasks = [self.verify_email(email, ids[i]) for i, email in enumerate(emails)]
         return await asyncio.gather(*tasks)
+
+    def load_blocked_domains(self, filename):
+        blocked = set()
+        try:
+            with open(filename, newline='', encoding='utf-8') as csvfile:
+                reader = csv.reader(csvfile)
+                for row in reader:
+                    if row:  # Avoid empty rows
+                        blocked.add(row[0].strip().lower())  # Assuming one domain per line
+        except FileNotFoundError:
+            print(f"[Warning] File '{filename}' not found. No blocked domains loaded.")
+        return blocked
 
 
 def main(sample_emails=[""], sample_ids=[""]):
@@ -215,5 +258,5 @@ def main(sample_emails=[""], sample_ids=[""]):
     results = loop.run_until_complete(verifier.process_batch(sample_emails, sample_ids))
     return results
 
-if __name__ == "__main__":
-    main(["priyam133@me.com","shubham@acadecraft.com"], ["123", "456"])
+# if __name__ == "__main__":
+#     main(["priyam133@me.com","shubham@acadecraft.com"], ["123", "456"])
