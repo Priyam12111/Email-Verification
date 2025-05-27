@@ -16,7 +16,7 @@ import csv
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-logging.basicConfig(filename='email_verifier.log', level=logging.INFO, 
+logging.basicConfig(filename='email_verifier.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$')
 
@@ -54,6 +54,21 @@ class EmailVerifier:
             'alt4.aspmx.l.google.com',
         }
         return any(host.lower().endswith('.google.com') or host.lower() in google_hosts for _, host in mx_records)
+
+    def get_mx_provider(self, mx_records):
+        google_hosts = ['google.com', 'googlemail.com']
+        microsoft_hosts = [
+            'outlook.com', 'hotmail.com', 'office365.com', 'microsoft.com',
+            'outlook.office365.com', 'mail.protection.outlook.com'
+        ]
+
+        for _, host in mx_records:
+            host = host.lower()
+            if any(gh in host for gh in google_hosts):
+                return "google"
+            if any(mh in host for mh in microsoft_hosts):
+                return "microsoft"
+        return "other"
 
     async def check_syntax(self, email):
         if not EMAIL_REGEX.match(email):
@@ -111,7 +126,6 @@ class EmailVerifier:
         for priority, host in mx_servers:
             try:
                 async with self.smtp_semaphore:
-                    # smtp = aiosmtplib.SMTP(hostname=host, port=self.smtp_port, timeout=self.timeout)
                     smtp = aiosmtplib.SMTP(hostname=host, port=587, timeout=self.timeout, start_tls=True)
                     await smtp.connect()
 
@@ -170,7 +184,8 @@ class EmailVerifier:
                 'valid': False,
                 'reason': 'Invalid syntax',
                 'catch_all': domain in self.catch_all_domains,
-                'timestamp': current_time
+                'timestamp': current_time,
+                'mx_provider': 'unknown'
             }
 
         if await self.check_disposable(domain):
@@ -180,7 +195,8 @@ class EmailVerifier:
                 'valid': False,
                 'reason': 'Disposable domain',
                 'catch_all': domain in self.catch_all_domains,
-                'timestamp': current_time
+                'timestamp': current_time,
+                'mx_provider': 'unknown'
             }
 
         mx_servers = await self.get_mx_servers(domain)
@@ -192,8 +208,12 @@ class EmailVerifier:
                 'valid': False,
                 'reason': 'No MX records/servers',
                 'catch_all': domain in self.catch_all_domains,
-                'timestamp': current_time
+                'timestamp': current_time,
+                'mx_provider': 'none'
             }
+
+        mx_provider = self.get_mx_provider(mx_servers)
+        is_google_hosted = mx_provider == "google"
 
         smtp_valid, reason = await self.smtp_check(email, mx_servers)
         if smtp_valid:
@@ -204,10 +224,9 @@ class EmailVerifier:
                 'valid': True,
                 'reason': reason,
                 'catch_all': domain in self.catch_all_domains,
-                'timestamp': current_time
+                'timestamp': current_time,
+                'mx_provider': mx_provider
             }
-
-        is_google_hosted = self.is_google_mx(mx_servers)
 
         if not is_google_hosted and domain not in self.catch_all_domains:
             catch_all_test = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
@@ -220,7 +239,8 @@ class EmailVerifier:
                     'valid': False,
                     'reason': 'Invalid email (catch-all)',
                     'catch_all': True,
-                    'timestamp': current_time
+                    'timestamp': current_time,
+                    'mx_provider': mx_provider
                 }
 
         self.validate_emails[id].append(False)
@@ -231,7 +251,8 @@ class EmailVerifier:
             'reason': reason,
             'catch_all': domain in self.catch_all_domains,
             'timestamp': current_time,
-            'smtp_error': self.error_desc
+            'smtp_error': self.error_desc,
+            'mx_provider': mx_provider
         }
 
     async def process_batch(self, emails, ids):
@@ -260,6 +281,3 @@ def main(sample_emails=[""], sample_ids=[""]):
     loop = asyncio.get_event_loop()
     results = loop.run_until_complete(verifier.process_batch(sample_emails, sample_ids))
     return results
-
-# if __name__ == "__main__":
-#     main(["priyam133@me.com","shubham@acadecraft.com"], ["123", "456"])
