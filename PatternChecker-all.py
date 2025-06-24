@@ -43,7 +43,6 @@ def generate_email_patterns(firstName, lastName, domain, index, user_id):
         log.info(f"Error generating pattern: {e}")
     return patterns
 
-
 def is_pattern_blocked(domain, index):
     entry = catch_all_patterns.find_one({"domain": domain, "invalid_patterns": index})
     return entry is not None
@@ -146,7 +145,9 @@ for user in cursor:
 
     email_variants = []
     index_map = {}
-    for idx in range(MAX_PATTERNS):
+    current_index = user.get("v6", 0)
+    
+    for idx in range(current_index, MAX_PATTERNS):
         if is_pattern_blocked(domain, idx):
             continue
         try:
@@ -157,74 +158,59 @@ for user in cursor:
                 first_initial=firstName[0] if firstName else '',
                 last_initial=lastName[0] if lastName else ''
             ).lower().replace('"', '').replace("(", "").replace(")", "")
-            email_variants.append(email)
-            index_map[email] = idx
-        except Exception:
+        except Exception as e:
+            log.info(f"Pattern formatting failed for {user_id} at index {idx}: {e}")
             continue
 
-    # verify all at once
-    results = main(email_variants, [user_id]*len(email_variants))
-    # for idx, email in enumerate(email_variants):
-    #     result = await verifier.verify_email(email, user_id)
-    #     if result.get("valid"):
-    #         # save + break
-    #         break
-    # print(f"resulst {results}")
+        # validate only this email
+        results = main([email], [user_id])  # assuming it returns list of dicts
+        if not results:
+            log.warning(f"No result returned for email: {email}, user: {user_id}")
+            continue
 
-    for result in results:
+        result = results[0]
+
         if result.get("valid") and result.get("id") == user_id:
-            valid_email = result.get("email")
-            pattern_index = index_map.get(valid_email)
-
-            # bulk_updates.append(UpdateOne(
-            #     {"_id": ObjectId(user_id)},
-            #     {"$set": {
-            #         "business_email": valid_email,
-            #         "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            #     }}
-            # ))
-            
-            # store in db
             users.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$set": {
-                    "business_email": valid_email,
+                    "business_email": email,
                     "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "email_verified": True,                            # ✅ example field
-                    "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # ✅ consistency
-                    "v6": pattern_index        
+                    "email_verified": True,
+                    "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "v6": idx        
                 }}
             )
-            log.info(f"[User Updated] {user_id} - {valid_email} using pattern index {pattern_index}")
+            log.info(f"[User Updated] {user_id} - {email} using pattern index {idx}")
 
-            if company_id is not None:
-                # store in company
+            if company_id:
                 company.update_one(
                     {"_id": company_id},
-                    {"$set": {"verified_pattern_index": pattern_index,
-                              "verified_patterns": [PATTERNS[pattern_index]],
-                              "verifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    {"$set": {
+                        "verified_pattern_index": idx,
+                        "verified_patterns": [PATTERNS[idx]],
+                        "verifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }}
                 )
-                log.info(f"[Pattern Verified] Domain: {domain} - Pattern index {pattern_index}")
-                # company_pattern_updates.append(UpdateOne(
-                #     {"_id": company_id},
-                #     {"$set": {"verified_pattern_index": pattern_index}}
-                # ))
-            break  # found one valid → stop checking other patterns
+                log.info(f"[Pattern Verified] Domain: {domain} - Pattern index {idx}")
+            break
+        else:
+            users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "v6": idx + 1,  # try next pattern next time
+                    "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }}
+            )
+            log.info(f"[Pattern Invalid] {email} → next index: {idx + 1}")
     else:
-        # pass
-        # optional: mark as tried all and failed
-        # update user
-        update_data = {
-            "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "v6": MAX_PATTERNS
-        }
-
-        if MAX_PATTERNS == len(MAX_PATTERNS):
-            update_data["allChecked"] = True
-
+        # If we tried all patterns
         users.update_one(
             {"_id": ObjectId(user_id)},
-            {"$set": update_data}
+            {"$set": {
+                "v6": MAX_PATTERNS,
+                "allChecked": True,
+                "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }}
         )
+        log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
