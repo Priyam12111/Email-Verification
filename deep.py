@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime
-import logging
 import aiodns
 import re
 import time
@@ -12,12 +11,14 @@ import requests
 import aiosmtplib
 import random
 import csv
+from browserValidation import browser_based_valid
+from configs.db import company
+from configs.logger import log
+import contextlib
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-logging.basicConfig(filename='email_verifier.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$')
 
 class EmailVerifier:
@@ -126,7 +127,7 @@ class EmailVerifier:
         for priority, host in mx_servers:
             try:
                 async with self.smtp_semaphore:
-                    smtp = aiosmtplib.SMTP(hostname=host, port=587, timeout=self.timeout, start_tls=True)
+                    smtp = aiosmtplib.SMTP(hostname=host, port=25, timeout=self.timeout, start_tls=True)
                     await smtp.connect()
 
                     code, _ = await smtp.ehlo()
@@ -159,12 +160,12 @@ class EmailVerifier:
 
             except Exception as e:
                 self.error_desc = str(e)
-                logging.error(f"[SMTP ERROR] {email} @ {host}: {e}")
+                log.error(f"[SMTP ERROR] {email} @ {host}: {e}")
 
                 if "4.2.1" in self.error_desc:
                     self.blocked_domains.add(domain)
                     self.catch_all_domains.add(domain)
-                    logging.warning(f"[Blocked] Sleeping due to rate limit on {domain}")
+                    log.warning(f"[Blocked] Sleeping due to rate limit on {domain}")
                     await asyncio.sleep(random.uniform(15, 45))
 
                 return False, f"SMTP exception: {str(e)}"
@@ -183,7 +184,7 @@ class EmailVerifier:
                 'email': email,
                 'valid': False,
                 'reason': 'Invalid syntax',
-                'catch_all': domain in self.catch_all_domains,
+                'catch_all': False,
                 'timestamp': current_time,
                 'mx_provider': 'unknown'
             }
@@ -194,7 +195,7 @@ class EmailVerifier:
                 'email': email,
                 'valid': False,
                 'reason': 'Disposable domain',
-                'catch_all': domain in self.catch_all_domains,
+                'catch_all': False,
                 'timestamp': current_time,
                 'mx_provider': 'unknown'
             }
@@ -207,57 +208,149 @@ class EmailVerifier:
                 'email': email,
                 'valid': False,
                 'reason': 'No MX records/servers',
-                'catch_all': domain in self.catch_all_domains,
+                'catch_all': False,
                 'timestamp': current_time,
                 'mx_provider': 'none'
             }
 
         mx_provider = self.get_mx_provider(mx_servers)
-        is_google_hosted = mx_provider == "google"
+        is_google = mx_provider == "google"
+        is_microsoft = mx_provider == "microsoft"
+        is_known_hosted = is_google or is_microsoft
 
-        smtp_valid, reason = await self.smtp_check(email, mx_servers)
+        smtp_valid, smtp_reason = await self.smtp_check(email, mx_servers)
+
         if smtp_valid:
+            # SMTP passed — check catch-all
+            if domain not in self.catch_all_domains:
+                test_email = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
+                catch_all_result, _ = await self.smtp_check(test_email, mx_servers)
+                if catch_all_result:
+                    self.catch_all_domains.add(domain)
+
+            if domain in self.catch_all_domains:
+                if is_known_hosted:
+                    is_browser_valid = browser_based_valid(email, mx_provider)
+                    if is_browser_valid:
+                        self.validate_emails[id].append(email)
+                        return {
+                            'id': id,
+                            'email': email,
+                            'valid': True,
+                            'reason': 'Browser-based validation (catch-all)',
+                            'catch_all': True,
+                            'timestamp': current_time,
+                            'mx_provider': mx_provider
+                        }
+                    else:
+                        self.validate_emails[id].append(False)
+                        return {
+                            'id': id,
+                            'email': email,
+                            'valid': False,
+                            'reason': 'Catch-all domain, browser check failed',
+                            'catch_all': True,
+                            'timestamp': current_time,
+                            'mx_provider': mx_provider
+                        }
+                else:
+                    self.validate_emails[id].append(False)
+                    return {
+                        'id': id,
+                        'email': email,
+                        'valid': False,
+                        'reason': 'Catch-all domain, non-browser-verifiable',
+                        'catch_all': True,
+                        'timestamp': current_time,
+                        'mx_provider': mx_provider
+                    }
+
+            # No catch-all → success
             self.validate_emails[id].append(email)
             return {
                 'id': id,
                 'email': email,
                 'valid': True,
-                'reason': reason,
-                'catch_all': domain in self.catch_all_domains,
+                'reason': smtp_reason,
+                'catch_all': False,
                 'timestamp': current_time,
                 'mx_provider': mx_provider
             }
 
-        if not is_google_hosted and domain not in self.catch_all_domains:
-            catch_all_test = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
-            catch_all_result, catch_reason = await self.smtp_check(catch_all_test, mx_servers)
-            if catch_all_result:
-                self.catch_all_domains.add(domain)
-                return {
-                    'id': id,
-                    'email': email,
-                    'valid': False,
-                    'reason': 'Invalid email (catch-all)',
-                    'catch_all': True,
-                    'timestamp': current_time,
-                    'mx_provider': mx_provider
-                }
+        # SMTP failed — check for "block" in error message
+        if "block" in smtp_reason.lower():
+            if domain in self.catch_all_domains or is_known_hosted:
+                is_browser_valid = browser_based_valid(email, mx_provider)
+                if is_browser_valid:
+                    self.validate_emails[id].append(email)
+                    return {
+                        'id': id,
+                        'email': email,
+                        'valid': True,
+                        'reason': 'Validated via browser (SMTP blocked)',
+                        'catch_all': domain in self.catch_all_domains,
+                        'timestamp': current_time,
+                        'mx_provider': mx_provider
+                    }
 
+        # Final fallback — Invalid
         self.validate_emails[id].append(False)
         return {
             'id': id,
             'email': email,
             'valid': False,
-            'reason': reason,
+            'reason': smtp_reason,
             'catch_all': domain in self.catch_all_domains,
             'timestamp': current_time,
             'smtp_error': self.error_desc,
             'mx_provider': mx_provider
         }
 
+    async def should_skip_verification(self, email, id):
+        log.info('here')
+        domain = email.split('@')[-1]
+        comp = company.find_one({"email_domain": domain} , sort=[("createdAt", -1)]) if domain else None
+        patterns = comp.get("verified_patterns", [])
+        
+        log.info(f"patterns: {patterns} {comp} {domain}")
+
+        if not patterns:
+            return False
+
+        if patterns:
+            # return that pattern that is defined for that particualar user it should not go with email generation even
+            log.info(f"Skipping verification for {email} — matched known pattern(s) for company {comp.get('name')}")
+            return True
+        return False
+    
     async def process_batch(self, emails, ids):
-        tasks = [self.verify_email(email, ids[i]) for i, email in enumerate(emails)]
-        return await asyncio.gather(*tasks)
+        tasks = []
+
+        for i, email in enumerate(emails):
+            id = ids[i]
+
+            log.info(f"id: {id}")
+            if await self.should_skip_verification(email, id):
+                result = {
+                    'id': id,
+                    'email': email,
+                    'valid': True,
+                    'reason': 'Skipped - known/verified domain',
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                tasks.append(result)
+            else:
+                tasks.append(self.verify_email(email, id))
+
+        coroutines = [task for task in tasks if asyncio.iscoroutine(task)]
+        static_results = [task for task in tasks if not asyncio.iscoroutine(task)]
+
+        verified = await asyncio.gather(*coroutines) if coroutines else []
+        return static_results + verified
+
+    # async def process_batch(self, emails, ids):
+    #     tasks = [self.verify_email(email, ids[i]) for i, email in enumerate(emails)]
+    #     return await asyncio.gather(*tasks)
 
     def load_blocked_domains(self, filename):
         blocked = set()
@@ -270,14 +363,85 @@ class EmailVerifier:
         except FileNotFoundError:
             print(f"[Warning] File '{filename}' not found. No blocked domains loaded.")
         return blocked
+    
+# async def verify_first_valid(email_variants, user_id):
+#     verifier = EmailVerifier(concurrency=50)
+#     tasks = [verifier.verify_email(email, user_id) for email in email_variants]
+
+#     for coro in asyncio.as_completed(tasks):
+#         result = await coro
+#         if result.get("valid"):
+#             return [result]  # return as list to match original return type
+
+#     # If none valid, collect all results (optional fallback)
+#     return [await task for task in tasks]
+
+# async def verify_first_valid(email_variants, user_id):
+#     verifier = EmailVerifier(concurrency=50)
+#     tasks = [asyncio.create_task(verifier.verify_email(email, user_id)) for email in email_variants]
+
+#     try:
+#         for coro in asyncio.as_completed(tasks):
+#             result = await coro
+#             if result.get("valid"):
+#                 for t in tasks:
+#                     if not t.done():
+#                         t.cancel()
+#                         with contextlib.suppress(asyncio.CancelledError):
+#                             await t
+#                 return [result]
+
+#         return [await t for t in tasks if not t.cancelled()]
+#     except Exception as e:
+#         for t in tasks:
+#             if not t.done():
+#                 t.cancel()
+#         raise e
+
+
+
+async def verify_first_valid_sequential(email_variants, user_id):
+    verifier = EmailVerifier(concurrency=1)  # 1 ensures no parallel SMTPs
+
+    for email in email_variants:
+        result = await verifier.verify_email(email, user_id)
+        if result.get("valid"):
+            return [result]  # ✅ stop immediately on success
+    return []  # ❌ all failed
+
+# def main(sample_emails=[""], sample_ids=[""]):
+#     print(len(sample_emails), len(sample_ids))
+#     if sample_ids == [""]:
+#         sample_ids = [0]*len(sample_emails)
+#     if not sample_emails:
+#         return []
+#     verifier = EmailVerifier(concurrency=50)
+#     loop = asyncio.get_event_loop()
+#     results = loop.run_until_complete(verifier.process_batch(sample_emails, sample_ids))
+#     return results
+
+# def main(sample_emails=[""], sample_ids=[""]):
+#     if sample_ids == [""]:
+#         sample_ids = [0]*len(sample_emails)
+#     if not sample_emails:
+#         return []
+
+#     email_variants = sample_emails
+#     user_id = sample_ids[0]  # Assuming one user at a time
+
+#     loop = asyncio.get_event_loop()
+#     results = loop.run_until_complete(verify_first_valid(email_variants, user_id))
+#     return results
 
 def main(sample_emails=[""], sample_ids=[""]):
-    print(len(sample_emails), len(sample_ids))
     if sample_ids == [""]:
-        sample_ids = [0]*len(sample_emails)
+        sample_ids = [0] * len(sample_emails)
     if not sample_emails:
         return []
-    verifier = EmailVerifier(concurrency=50)
+
+    email_variants = sample_emails
+    user_id = sample_ids[0]  # Assuming all variants are for 1 user
+
     loop = asyncio.get_event_loop()
-    results = loop.run_until_complete(verifier.process_batch(sample_emails, sample_ids))
+    results = loop.run_until_complete(verify_first_valid_sequential(email_variants, user_id))
     return results
