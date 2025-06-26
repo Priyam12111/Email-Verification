@@ -53,8 +53,10 @@ class EmailVerifier:
             'alt2.aspmx.l.google.com',
             'alt3.aspmx.l.google.com',
             'alt4.aspmx.l.google.com',
+            'googlemail.com',
+            'aspmx.l.googlemail.com',   
         }
-        return any(host.lower().endswith('.google.com') or host.lower() in google_hosts for _, host in mx_records)
+        return any(host.lower().endswith('google.com') or host.lower() in google_hosts for _, host in mx_records)
 
     def get_mx_provider(self, mx_records):
         google_hosts = ['google.com', 'googlemail.com']
@@ -142,7 +144,7 @@ class EmailVerifier:
 
                     if code == 250:
                         if self.is_google_mx(mx_servers):
-                            return False, "Unverifiable — hosted on Google (ambiguous 250)"
+                            return True, "Unverifiable — hosted on Google (ambiguous 250)"
                         return True, "Verified via RCPT"
                     elif code == 550:
                         return False, "Mailbox not found"
@@ -202,7 +204,7 @@ class EmailVerifier:
 
         mx_servers = await self.get_mx_servers(domain)
         if not mx_servers:
-            self.validate_emails[id].append(False)
+            self.validate_emails.setdefault(id, []).append(False)
             return {
                 'id': id,
                 'email': email,
@@ -221,52 +223,49 @@ class EmailVerifier:
         smtp_valid, smtp_reason = await self.smtp_check(email, mx_servers)
 
         if smtp_valid:
-            # SMTP passed — check catch-all
+            is_catch_all = False
             if domain not in self.catch_all_domains:
                 test_email = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
                 catch_all_result, _ = await self.smtp_check(test_email, mx_servers)
                 if catch_all_result:
                     self.catch_all_domains.add(domain)
+                    is_catch_all = True
+            else:
+                is_catch_all = True
 
-            if domain in self.catch_all_domains:
-                if is_known_hosted:
+            if is_catch_all or ("ambiguous" in smtp_reason.lower() and is_known_hosted):
+                try:
                     is_browser_valid = browser_based_valid(email, mx_provider)
-                    if is_browser_valid:
-                        self.validate_emails[id].append(email)
-                        return {
-                            'id': id,
-                            'email': email,
-                            'valid': True,
-                            'reason': 'Browser-based validation (catch-all)',
-                            'catch_all': True,
-                            'timestamp': current_time,
-                            'mx_provider': mx_provider
-                        }
-                    else:
-                        self.validate_emails[id].append(False)
-                        return {
-                            'id': id,
-                            'email': email,
-                            'valid': False,
-                            'reason': 'Catch-all domain, browser check failed',
-                            'catch_all': True,
-                            'timestamp': current_time,
-                            'mx_provider': mx_provider
-                        }
+                    log.info(f"Browser check result for {email}: {is_browser_valid}")
+                except Exception as e:
+                    log.error(f"Browser validation failed for {email}: {e}")
+                    is_browser_valid = False
+
+                if is_browser_valid:
+                    self.validate_emails.setdefault(id, []).append(email)
+                    return {
+                        'id': id,
+                        'email': email,
+                        'valid': True,
+                        'reason': 'Browser-based validation (catch-all or ambiguous)',
+                        'catch_all': is_catch_all,
+                        'timestamp': current_time,
+                        'mx_provider': mx_provider
+                    }
                 else:
-                    self.validate_emails[id].append(False)
+                    self.validate_emails.setdefault(id, []).append(False)
                     return {
                         'id': id,
                         'email': email,
                         'valid': False,
-                        'reason': 'Catch-all domain, non-browser-verifiable',
-                        'catch_all': True,
+                        'reason': 'Catch-all/ambiguous domain, browser check failed',
+                        'catch_all': is_catch_all,
                         'timestamp': current_time,
                         'mx_provider': mx_provider
                     }
 
-            # No catch-all → success
-            self.validate_emails[id].append(email)
+            # No catch-all, no ambiguity → SMTP is enough
+            self.validate_emails.setdefault(id, []).append(email)
             return {
                 'id': id,
                 'email': email,
@@ -277,12 +276,18 @@ class EmailVerifier:
                 'mx_provider': mx_provider
             }
 
-        # SMTP failed — check for "block" in error message
+        # SMTP failed — possible block → try browser fallback
         if "block" in smtp_reason.lower():
             if domain in self.catch_all_domains or is_known_hosted:
-                is_browser_valid = browser_based_valid(email, mx_provider)
+                try:
+                    is_browser_valid = browser_based_valid(email, mx_provider)
+                    log.info(f"Browser fallback (blocked SMTP) result: {is_browser_valid}")
+                except Exception as e:
+                    log.error(f"Browser fallback failed: {e}")
+                    is_browser_valid = False
+
                 if is_browser_valid:
-                    self.validate_emails[id].append(email)
+                    self.validate_emails.setdefault(id, []).append(email)
                     return {
                         'id': id,
                         'email': email,
@@ -293,8 +298,8 @@ class EmailVerifier:
                         'mx_provider': mx_provider
                     }
 
-        # Final fallback — Invalid
-        self.validate_emails[id].append(False)
+        # Final fallback — invalid
+        self.validate_emails.setdefault(id, []).append(False)
         return {
             'id': id,
             'email': email,

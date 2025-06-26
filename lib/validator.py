@@ -34,7 +34,7 @@ class AccountChecker(BrowserManager):
 
             # log.info(f"Email pattern - {email} not found on Google or Microsoft")
             # log.info(f"Is valid: {is_valid_email}")
-            log.info(f"[{email}] Validity checked for provider: {provider} → {is_valid_email}")
+            log.info(f"[{email}] Validity checked for provider: {provider} - {is_valid_email}")
             return is_valid_email
         
         except Exception as e:
@@ -259,6 +259,49 @@ class AccountChecker(BrowserManager):
     #     except Exception as e:
     #         log.error(f"[{email}] ❌ Exception during validation: {e}")
     #         return False
+
+    def validate_google_account(self, driver, email):
+        log.info('here123456')
+        try:
+            self.navigate_to_url(driver, self.settings['google']['url'])
+            input_box = self.find_element(driver, By.XPATH, self.settings['google']['selectors']['username'])
+            
+            if input_box:
+                self.type_abs_position(self.settings['google']['pos']['username'], email)
+                time.sleep(1)
+                self.click_abs_position(self.settings['google']['pos']['submit'])
+                time.sleep(5)
+                
+                response_element = self.find_element_quick(driver, By.XPATH, [self.settings['google']['selectors']['response']])
+                if response_element:
+                    log.info(f"Email pattern - {email} is Not valid")
+                    # driver.refresh()
+                    return False
+                else:
+                    time.sleep(3)
+                    confirm_element = self.find_element_quick(driver, By.XPATH, [self.settings['google']['selectors']['confirm']])
+                    if confirm_element:
+                        if ("Welcome" in confirm_element.text) or ("Verify" in confirm_element.text):
+                            log.info(f"Email pattern - {email} is valid")
+                            return True
+                        else:
+                            workspace_confirm_element = self.find_element_quick(driver, By.XPATH, [self.settings['google']['selectors']['workspace_confirm']])
+                            if workspace_confirm_element:
+                                if "Connecting to" in workspace_confirm_element.text:
+                                    log.info(f"Email pattern - {email} is valid")
+                                    return True
+                                else:
+                                    return False
+                            else:
+                                return False
+                            
+                    return False
+                    
+            return False
+            
+        except Exception as e:
+            log.error(str(e))
+            return False
 
 
     def validate_microsoft_account(self, driver, email):

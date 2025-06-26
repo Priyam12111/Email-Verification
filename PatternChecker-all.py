@@ -119,7 +119,7 @@ MAX_PATTERNS = 17  # or limit to e.g. 5
 # }
 
 query = {
-  "url_id": ObjectId("685a6b65e97944fca387317c"),
+  "url_id": ObjectId("685a5f5fe97944fca387317b"),
   "business_email": {
     "$in": ["", None, False]
   },
@@ -202,7 +202,7 @@ for user in cursor:
                     "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }}
             )
-            log.info(f"[Pattern Invalid] {email} → next index: {idx + 1}")
+            log.info(f"[Pattern Invalid] {email} - next index: {idx + 1}")
     else:
         # If we tried all patterns
         users.update_one(
