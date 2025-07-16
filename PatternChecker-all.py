@@ -118,99 +118,128 @@ MAX_PATTERNS = 17  # or limit to e.g. 5
 #     "createdAt": {"$lt": "2025-06-17", "$gte": "2025-06-10"}, "fullName": "Aisling McGowan"
 # }
 
-query = {
-  "url_id": ObjectId("685a5f5fe97944fca387317b"),
-  "business_email": {
-    "$in": ["", None, False]
-  },
-  "allChecked": { "$exists": False }
-}
+# query = {
+#   "url_id": ObjectId("685a5f5fe97944fca387317b"),
+#   "business_email": {
+#     "$in": ["", None, False]
+#   },
+#   "allChecked": { "$exists": False }
+# }
 
-cursor = users.find(query).limit(BATCH_SIZE)
+# cursor = users.find(query).limit(BATCH_SIZE)
 
-bulk_updates = []
-company_pattern_updates = []
+while True: 
+    pipeline = [
+        {
+            "$match": {
+                "business_email": {"$in": ["", None, False]},
+                "allChecked": {"$exists": False}
+            }
+        },
+        {
+            "$lookup": {
+                "from": "company-1",
+                "localField": "refCompanyId",
+                "foreignField": "_id",
+                "as": "company"
+            }
+        },
+        {
+            "$unwind": "$company"
+        },
+        {
+            "$match": {
+                "company.email_domain": {"$exists": True, "$ne": ""}
+            }
+        },
+        { "$limit": BATCH_SIZE }
+    ]
 
-for user in cursor:
-    fullName = user.get("fullName", "").split()
-    firstName = fullName[0] if len(fullName) > 0 else ""
-    lastName = fullName[-1] if len(fullName) > 1 else ""
-    user_id = str(user["_id"])
-    company_id = user.get("refCompanyId")
+    cursor = users.aggregate(pipeline)
 
-    company_doc = company.find_one({"_id": company_id}) if company_id else None
-    domain = company_doc.get("email_domain") if company_doc else None
-    if not domain:
-        continue
+    bulk_updates = []
+    company_pattern_updates = []
 
-    email_variants = []
-    index_map = {}
-    current_index = user.get("v6", 0)
-    
-    for idx in range(current_index, MAX_PATTERNS):
-        if is_pattern_blocked(domain, idx):
+    for user in cursor:
+        fullName = user.get("fullName", "").split()
+        firstName = fullName[0] if len(fullName) > 0 else ""
+        lastName = fullName[-1] if len(fullName) > 1 else ""
+        user_id = str(user["_id"])
+        company_id = user.get("refCompanyId")
+
+        company_doc = company.find_one({"_id": company_id}) if company_id else None
+        domain = company_doc.get("email_domain") if company_doc else None
+        if not domain:
             continue
-        try:
-            email = PATTERNS[idx].format(
-                first=firstName,
-                last=lastName,
-                domain=domain,
-                first_initial=firstName[0] if firstName else '',
-                last_initial=lastName[0] if lastName else ''
-            ).lower().replace('"', '').replace("(", "").replace(")", "")
-        except Exception as e:
-            log.info(f"Pattern formatting failed for {user_id} at index {idx}: {e}")
-            continue
 
-        # validate only this email
-        results = main([email], [user_id])  # assuming it returns list of dicts
-        if not results:
-            log.warning(f"No result returned for email: {email}, user: {user_id}")
-            continue
+        email_variants = []
+        index_map = {}
+        current_index = user.get("v6", 0)
+        
+        for idx in range(current_index, MAX_PATTERNS):
+            if is_pattern_blocked(domain, idx):
+                continue
+            try:
+                email = PATTERNS[idx].format(
+                    first=firstName,
+                    last=lastName,
+                    domain=domain,
+                    first_initial=firstName[0] if firstName else '',
+                    last_initial=lastName[0] if lastName else ''
+                ).lower().replace('"', '').replace("(", "").replace(")", "")
+            except Exception as e:
+                log.info(f"Pattern formatting failed for {user_id} at index {idx}: {e}")
+                continue
 
-        result = results[0]
+            # validate only this email
+            results = main([email], [user_id])  # assuming it returns list of dicts
+            if not results:
+                log.warning(f"No result returned for email: {email}, user: {user_id}")
+                continue
 
-        if result.get("valid") and result.get("id") == user_id:
-            users.update_one(
-                {"_id": ObjectId(user_id)},
-                {"$set": {
-                    "business_email": email,
-                    "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "email_verified": True,
-                    "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "v6": idx        
-                }}
-            )
-            log.info(f"[User Updated] {user_id} - {email} using pattern index {idx}")
+            result = results[0]
 
-            if company_id:
-                company.update_one(
-                    {"_id": company_id},
+            if result.get("valid") and result.get("id") == user_id:
+                users.update_one(
+                    {"_id": ObjectId(user_id)},
                     {"$set": {
-                        "verified_pattern_index": idx,
-                        "verified_patterns": [PATTERNS[idx]],
-                        "verifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        "business_email": email,
+                        "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "email_verified": True,
+                        "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "v6": idx        
                     }}
                 )
-                log.info(f"[Pattern Verified] Domain: {domain} - Pattern index {idx}")
-            break
+                log.info(f"[User Updated] {user_id} - {email} using pattern index {idx}")
+
+                if company_id:
+                    company.update_one(
+                        {"_id": company_id},
+                        {"$set": {
+                            "verified_pattern_index": idx,
+                            "verified_patterns": [PATTERNS[idx]],
+                            "verifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }}
+                    )
+                    log.info(f"[Pattern Verified] Domain: {domain} - Pattern index {idx}")
+                break
+            else:
+                users.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {"$set": {
+                        "v6": idx + 1,  # try next pattern next time
+                        "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }}
+                )
+                log.info(f"[Pattern Invalid] {email} - next index: {idx + 1}")
         else:
+            # If we tried all patterns
             users.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$set": {
-                    "v6": idx + 1,  # try next pattern next time
+                    "v6": MAX_PATTERNS,
+                    "allChecked": True,
                     "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }}
             )
-            log.info(f"[Pattern Invalid] {email} - next index: {idx + 1}")
-    else:
-        # If we tried all patterns
-        users.update_one(
-            {"_id": ObjectId(user_id)},
-            {"$set": {
-                "v6": MAX_PATTERNS,
-                "allChecked": True,
-                "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }}
-        )
-        log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
+            log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
