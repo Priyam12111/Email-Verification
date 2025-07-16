@@ -77,12 +77,13 @@ def process_users_dataset(dataset, index):
     return email_user_pairs
 
 for index in range(len(PATTERNS)):
-    total_docs = users.count_documents({"$and": [
-        {"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]},
-        {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}
-    ]})
+    total_docs = users.count_documents({
+        "$and": [
+            {"$or": [{"business_email": {"$exists": False}}, {"business_email": {"$in": ["", None]}}]},
+            {"$or": [{"v6": {"$exists": False}}, {"v6": index}]}
+        ]})
     
-    logging.info(f"Processing pattern {index} ({PATTERNS[index]}) {total_docs}")
+    logging.info(f"Processing pattern {index} ({PATTERNS[index]}) - {total_docs} users")
     
     for skip in range(0, total_docs, 500):
         try:
@@ -100,49 +101,51 @@ for index in range(len(PATTERNS)):
                 logging.info("No more users to process.")
                 break
 
-            # Generate email patterns in memory
             email_user_pairs = process_users_dataset(data, index)
-            
             if not email_user_pairs:
                 continue
 
-            # Split into separate lists for processing
             emails_list = [pair[0] for pair in email_user_pairs]
             user_ids_list = [pair[1] for pair in email_user_pairs]
 
-            # Process emails through verification system
             verification_results = main(emails_list, user_ids_list)
-            # Prepare bulk operations
+
             updates = []
             valid_user_ids = []
-            
-            user_id = verification_results['id']
-            valid_email = verification_results["email"]
-            if user_id and valid_email:
-                updates.append(
-                    UpdateOne(
-                        {"_id": ObjectId(user_id)},
-                        {"$set": {
-                            "business_email": valid_email,
-                            "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }}
-                    )
-                )
-                if user_id in user_ids_list:
-                    user_ids_list.remove(user_id)
-                valid_user_ids.append(user_id)
 
-            # Execute bulk updates
+            for result in verification_results:
+                user_id = result.get("id")
+                valid_email = result.get("email")
+                if result.get("valid") and user_id and valid_email:
+                    updates.append(
+                        UpdateOne(
+                            {"_id": ObjectId(user_id)},
+                            {"$set": {
+                                "business_email": valid_email,
+                                "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }}
+                        )
+                    )
+                    if user_id in user_ids_list:
+                        user_ids_list.remove(user_id)
+                    valid_user_ids.append(user_id)
+
             if updates:
                 db["users"].bulk_write(updates)
-                logging.info(f"Updated {len(updates)} users with valid emails")
+                logging.info(f"Updated {len(updates)} users with valid emails using pattern {index}")
 
-            # Update v6 field for processed users
-            update_v6_result = users.update_many(
-                {"_id": {"$in": [ObjectId(uid) for uid in user_ids_list]}},
-                {"$inc": {"v6": 1},"$set": {"v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}}
-            )
-            logging.info(f"Updated v6 field for {update_v6_result.modified_count} users")
+            if user_ids_list:
+                update_v6_result = users.update_many(
+                    {"_id": {"$in": [ObjectId(uid) for uid in user_ids_list]}},
+                    {
+                        "$inc": {"v6": 1},
+                        "$set": {
+                            "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "modifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                    }
+                )
+                logging.info(f"Updated v6 field for {update_v6_result.modified_count} users (pattern {index})")
 
         except Exception as e:
             logging.info(f"An error occurred: {e}")
