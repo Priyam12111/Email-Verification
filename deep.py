@@ -323,30 +323,209 @@ class EmailVerifier:
             'mx_provider': mx_provider
         }
 
-    async def verify_email_with_mx(verifier, email, user_id, mx_servers, catch_all_domains):
+    # async def verify_email_with_mx(verifier, email, user_id, mx_servers, catch_all_domains):
+    #     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    #     mx_provider = verifier.get_mx_provider(mx_servers)
+    #     is_google = mx_provider == "google"
+    #     is_microsoft = mx_provider == "microsoft"
+    #     is_known_hosted = is_google or is_microsoft
+    #     domain = email.split("@")[1]
+
+    #     smtp_valid, smtp_reason = await verifier.smtp_check(email, mx_servers)
+
+    #     if smtp_valid:
+    #         is_catch_all = False
+    #         # if domain not in catch_all_domains:
+    #         #     test_email = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
+    #         #     catch_all_result, _ = await verifier.smtp_check(test_email, mx_servers)
+    #         #     if catch_all_result:
+    #         #         catch_all_domains.add(domain)
+    #         #         is_catch_all = True
+    #         # else:
+    #         #     is_catch_all = True
+
+    #         if is_catch_all or ("ambiguous" in smtp_reason.lower() and is_known_hosted):
+    #             try:
+    #                 is_browser_valid = browser_based_valid(email, mx_provider)
+    #             except Exception as e:
+    #                 log.error(f"Browser validation failed for {email}: {e}")
+    #                 is_browser_valid = False
+
+    #             if is_browser_valid:
+    #                 return {
+    #                     'id': user_id,
+    #                     'email': email,
+    #                     'valid': True,
+    #                     'reason': 'Browser-based validation (catch-all or ambiguous)',
+    #                     'catch_all': is_catch_all,
+    #                     'timestamp': current_time,
+    #                     'mx_provider': mx_provider
+    #                 }
+    #             else:
+    #                 return {
+    #                     'id': user_id,
+    #                     'email': email,
+    #                     'valid': False,
+    #                     'reason': 'Catch-all/ambiguous domain, browser check failed',
+    #                     'catch_all': is_catch_all,
+    #                     'timestamp': current_time,
+    #                     'mx_provider': mx_provider
+    #                 }
+
+    #         # No catch-all/ambiguity: SMTP is enough
+    #         return {
+    #             'id': user_id,
+    #             'email': email,
+    #             'valid': True,
+    #             'reason': smtp_reason,
+    #             'catch_all': False,
+    #             'timestamp': current_time,
+    #             'mx_provider': mx_provider
+    #         }
+
+    #     # SMTP failed, possible block → try browser fallback
+    #     if "block" in smtp_reason.lower():
+    #         domain = email.split("@")[1]
+    #         if domain in catch_all_domains or is_known_hosted:
+    #             try:
+    #                 is_browser_valid = browser_based_valid(email, mx_provider)
+    #             except Exception as e:
+    #                 log.error(f"Browser fallback failed: {e}")
+    #                 is_browser_valid = False
+
+    #             if is_browser_valid:
+    #                 return {
+    #                     'id': user_id,
+    #                     'email': email,
+    #                     'valid': True,
+    #                     'reason': 'Validated via browser (SMTP blocked)',
+    #                     'catch_all': domain in catch_all_domains,
+    #                     'timestamp': current_time,
+    #                     'mx_provider': mx_provider
+    #                 }
+
+    #     # Final fallback: invalid
+    #     return {
+    #         'id': user_id,
+    #         'email': email,
+    #         'valid': False,
+    #         'reason': smtp_reason,
+    #         'catch_all': domain in catch_all_domains,
+    #         'timestamp': current_time,
+    #         'mx_provider': mx_provider
+    #     }
+        
+    # async def verify_email_with_mx(
+    #     self, email, user_id, mx_servers, mx_provider, is_catch_all, catch_all_domains, driver
+    # ):
+    #     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    #     is_google = mx_provider == "google"
+    #     is_microsoft = mx_provider == "microsoft"
+    #     is_known_hosted = is_google or is_microsoft
+    #     domain = email.split("@")[1]
+
+    #     smtp_valid, smtp_reason = await self.smtp_check(email, mx_servers)
+
+    #     if smtp_valid:
+    #         if is_catch_all or ("ambiguous" in smtp_reason.lower() and is_known_hosted):
+    #             try:
+    #                 is_browser_valid = browser_based_valid(email, mx_provider, driver)
+    #             except Exception as e:
+    #                 log.error(f"Browser validation failed for {email}: {e}")
+    #                 is_browser_valid = False
+
+    #             if is_browser_valid:
+    #                 return {
+    #                     'id': user_id,
+    #                     'email': email,
+    #                     'valid': True,
+    #                     'reason': 'Browser-based validation (catch-all or ambiguous)',
+    #                     'catch_all': is_catch_all,
+    #                     'timestamp': current_time,
+    #                     'mx_provider': mx_provider
+    #                 }
+    #             else:
+    #                 return {
+    #                     'id': user_id,
+    #                     'email': email,
+    #                     'valid': False,
+    #                     'reason': 'Catch-all/ambiguous domain, browser check failed',
+    #                     'catch_all': is_catch_all,
+    #                     'timestamp': current_time,
+    #                     'mx_provider': mx_provider
+    #                 }
+
+    #         # No catch-all, no ambiguity → SMTP is enough
+    #         return {
+    #             'id': user_id,
+    #             'email': email,
+    #             'valid': True,
+    #             'reason': smtp_reason,
+    #             'catch_all': False,
+    #             'timestamp': current_time,
+    #             'mx_provider': mx_provider
+    #         }
+
+    #     # SMTP failed, possible block → try browser fallback
+    #     if "block" in smtp_reason.lower():
+    #         if is_catch_all or is_known_hosted:
+    #             try:
+    #                 is_browser_valid = browser_based_valid(email, mx_provider, driver)
+    #             except Exception as e:
+    #                 log.error(f"Browser fallback failed: {e}")
+    #                 is_browser_valid = False
+
+    #             if is_browser_valid:
+    #                 return {
+    #                     'id': user_id,
+    #                     'email': email,
+    #                     'valid': True,
+    #                     'reason': 'Validated via browser (SMTP blocked)',
+    #                     'catch_all': is_catch_all,
+    #                     'timestamp': current_time,
+    #                     'mx_provider': mx_provider
+    #                 }
+
+    #     # Final fallback — invalid
+    #     return {
+    #         'id': user_id,
+    #         'email': email,
+    #         'valid': False,
+    #         'reason': smtp_reason,
+    #         'catch_all': is_catch_all,
+    #         'timestamp': current_time,
+    #         'mx_provider': mx_provider
+    #     }
+
+    def is_blocked_smtp_reason(self, reason):
+        """Detect if SMTP failed due to a block/blacklist."""
+        if not reason:
+            return False
+        reason = reason.lower()
+        return any(
+            phrase in reason
+            for phrase in [
+                "block", "spamhaus", "listed", "service unavailable", "temporary", "blacklist", "css", "xbl"
+            ]
+        )
+
+    async def verify_email_with_mx(
+        self, email, user_id, mx_servers, mx_provider, is_catch_all, catch_all_domains, driver
+    ):
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        mx_provider = verifier.get_mx_provider(mx_servers)
         is_google = mx_provider == "google"
         is_microsoft = mx_provider == "microsoft"
         is_known_hosted = is_google or is_microsoft
         domain = email.split("@")[1]
 
-        smtp_valid, smtp_reason = await verifier.smtp_check(email, mx_servers)
+        smtp_valid, smtp_reason = await self.smtp_check(email, mx_servers)
+        log.info(f"SMTP check: valid={smtp_valid} reason={smtp_reason}")
 
         if smtp_valid:
-            is_catch_all = False
-            if domain not in catch_all_domains:
-                test_email = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
-                catch_all_result, _ = await verifier.smtp_check(test_email, mx_servers)
-                if catch_all_result:
-                    catch_all_domains.add(domain)
-                    is_catch_all = True
-            else:
-                is_catch_all = True
-
+            # Browser fallback only for catch-all or ambiguous cases
             if is_catch_all or ("ambiguous" in smtp_reason.lower() and is_known_hosted):
                 try:
-                    is_browser_valid = browser_based_valid(email, mx_provider)
+                    is_browser_valid = browser_based_valid(driver, email, mx_provider)
                 except Exception as e:
                     log.error(f"Browser validation failed for {email}: {e}")
                     is_browser_valid = False
@@ -371,8 +550,7 @@ class EmailVerifier:
                         'timestamp': current_time,
                         'mx_provider': mx_provider
                     }
-
-            # No catch-all/ambiguity: SMTP is enough
+            # No catch-all, no ambiguity → SMTP is enough
             return {
                 'id': user_id,
                 'email': email,
@@ -383,14 +561,21 @@ class EmailVerifier:
                 'mx_provider': mx_provider
             }
 
-        # SMTP failed, possible block → try browser fallback
-        if "block" in smtp_reason.lower():
-            domain = email.split("@")[1]
-            if domain in catch_all_domains or is_known_hosted:
+        # --- If SMTP failed due to block/blacklist, do browser-based check(s) ---
+        if self.is_blocked_smtp_reason(smtp_reason):
+            log.info(f"[{email}] SMTP blocked/blacklisted, attempting browser-based checks...")
+            # Try with detected provider first, then try both if ambiguous
+            providers_to_try = []
+            if mx_provider in [None, "", "unknown"]:
+                providers_to_try = ["google", "microsoft"]
+            else:
+                providers_to_try = [mx_provider]
+
+            for provider in providers_to_try:
                 try:
-                    is_browser_valid = browser_based_valid(email, mx_provider)
+                    is_browser_valid = browser_based_valid(driver, email, provider)
                 except Exception as e:
-                    log.error(f"Browser fallback failed: {e}")
+                    log.error(f"[{email}] Browser validation failed for provider {provider}: {e}")
                     is_browser_valid = False
 
                 if is_browser_valid:
@@ -398,23 +583,34 @@ class EmailVerifier:
                         'id': user_id,
                         'email': email,
                         'valid': True,
-                        'reason': 'Validated via browser (SMTP blocked)',
-                        'catch_all': domain in catch_all_domains,
+                        'reason': f'Validated via browser ({provider}) (SMTP blocked)',
+                        'catch_all': is_catch_all,
                         'timestamp': current_time,
-                        'mx_provider': mx_provider
+                        'mx_provider': provider
                     }
 
-        # Final fallback: invalid
+            # If none succeeded
+            return {
+                'id': user_id,
+                'email': email,
+                'valid': False,
+                'reason': 'Browser check failed after SMTP blocked/blacklisted',
+                'catch_all': is_catch_all,
+                'timestamp': current_time,
+                'mx_provider': mx_provider
+            }
+
+        # --- Final fallback: invalid ---
         return {
             'id': user_id,
             'email': email,
             'valid': False,
             'reason': smtp_reason,
-            'catch_all': domain in catch_all_domains,
+            'catch_all': is_catch_all,
             'timestamp': current_time,
             'mx_provider': mx_provider
         }
-        
+
     async def should_skip_verification(self, email, id):
         log.info('here')
         domain = email.split('@')[-1]

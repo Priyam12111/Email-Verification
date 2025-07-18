@@ -18,28 +18,31 @@ class AccountChecker(BrowserManager):
     def validate(self, driver, email_input_list, provider):
         try:
             email = email_input_list[0]
-            log.info('Checking whether email domain exists or not...')
+            log.info(f'Checking whether email domain exists or not: {email}')
 
             if provider == 'google':
                 is_valid_email = self.validate_google_account(driver, email)
 
-            elif provider == 'microsoft':        
+            elif provider == 'microsoft':
                 is_valid_email = self.validate_microsoft_account(driver, email)
 
             else:
-                log.info("Domain not found for browser verify: %s" % email)
-                pass
+                # Try Google first; return immediately if valid
+                is_valid_email = self.validate_google_account(driver, email)
+                if is_valid_email:
+                    log.info(f"[{email}] Valid via Google.")
+                    return True
+                # If not valid via Google, try Microsoft
+                is_valid_email = self.validate_microsoft_account(driver, email)
+                log.info(f"[{email}] Valid via Microsoft: {is_valid_email}")
+                return is_valid_email
 
-            driver.close()
-
-            # log.info(f"Email pattern - {email} not found on Google or Microsoft")
-            # log.info(f"Is valid: {is_valid_email}")
             log.info(f"[{email}] Validity checked for provider: {provider} - {is_valid_email}")
             return is_valid_email
-        
+
         except Exception as e:
-            log.error(str(e))
-            return "Error", None
+            log.error(f"[{email}] Exception during browser-based validation: {str(e)}")
+            return False
 
 
     def create_email_patterns(self, first_name, last_name, domain):

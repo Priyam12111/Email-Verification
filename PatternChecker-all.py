@@ -7,6 +7,11 @@ from configs.db import users, company, catch_all_patterns, db
 from configs.logger import log
 import asyncio
 from deep import EmailVerifier
+import random
+import time
+from lib.browser import BrowserManager
+
+browser_manager = BrowserManager() 
 
 PATTERNS = [
     "{first}.{last}@{domain}",
@@ -338,7 +343,100 @@ MAX_PATTERNS = 17
 
 # --- MAIN USER PROCESSOR ---
 
-async def process_user_patterns(user, PATTERNS, verifier, catch_all_domains):
+# async def process_user_patterns(user, PATTERNS, verifier, catch_all_domains):
+#     fullName = user.get("fullName", "").split()
+#     firstName = fullName[0] if len(fullName) > 0 else ""
+#     lastName = fullName[-1] if len(fullName) > 1 else ""
+#     user_id = str(user["_id"])
+#     company_id = user.get("refCompanyId")
+
+#     company_doc = company.find_one({"_id": company_id}) if company_id else None
+#     domain = company_doc.get("email_domain") if company_doc else None
+#     if not domain:
+#         return
+
+#     current_index = user.get("v6", 0)
+
+#     # DOMAIN CHECKS ONCE
+#     ok, mx_or_reason = await verifier.domain_precheck(firstName, lastName, domain)
+#     if not ok:
+#         users.update_one(
+#             {"_id": ObjectId(user_id)},
+#             {"$set": {
+#                 "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+#                 "pattern_invalid_reason": mx_or_reason,
+#                 "allChecked": True,
+#                 "v6": len(PATTERNS)
+#             }}
+#         )
+#         log.info(f"[Domain Invalid] {user_id} - {domain} - {mx_or_reason}")
+#         return
+
+#     mx_servers = mx_or_reason
+
+#     # PATTERN LOOP
+#     for idx in range(current_index, len(PATTERNS)):
+#         if is_pattern_blocked(domain, idx):
+#             continue
+#         try:
+#             email = PATTERNS[idx].format(
+#                 first=firstName,
+#                 last=lastName,
+#                 domain=domain,
+#                 first_initial=firstName[0] if firstName else '',
+#                 last_initial=lastName[0] if lastName else ''
+#             ).lower().replace('"', '').replace("(", "").replace(")", "")
+#         except Exception as e:
+#             log.info(f"Pattern formatting failed for {user_id} at index {idx}: {e}")
+#             continue
+
+#         result = await verifier.verify_email_with_mx(email, user_id, mx_servers, catch_all_domains)
+
+#         if result.get("valid"):
+#             users.update_one(
+#                 {"_id": ObjectId(user_id)},
+#                 {"$set": {
+#                     "business_email": email,
+#                     "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+#                     "email_verified": True,
+#                     "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+#                     "v6": idx
+#                 }}
+#             )
+#             log.info(f"[User Updated] {user_id} - {email} using pattern index {idx}")
+
+#             if company_id:
+#                 company.update_one(
+#                     {"_id": company_id},
+#                     {"$set": {
+#                         "verified_pattern_index": idx,
+#                         "verified_patterns": [PATTERNS[idx]],
+#                         "verifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#                     }}
+#                 )
+#                 log.info(f"[Pattern Verified] Domain: {domain} - Pattern index {idx}")
+#             break
+#         else:
+#             users.update_one(
+#                 {"_id": ObjectId(user_id)},
+#                 {"$set": {
+#                     "v6": idx + 1,  # try next pattern next time
+#                     "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#                 }}
+#             )
+#             log.info(f"[Pattern Invalid] {email} - next index: {idx + 1}")
+#     else:
+#         users.update_one(
+#             {"_id": ObjectId(user_id)},
+#             {"$set": {
+#                 "v6": len(PATTERNS),
+#                 "allChecked": True,
+#                 "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#             }}
+#         )
+#         log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
+
+async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains):
     fullName = user.get("fullName", "").split()
     firstName = fullName[0] if len(fullName) > 0 else ""
     lastName = fullName[-1] if len(fullName) > 1 else ""
@@ -368,8 +466,17 @@ async def process_user_patterns(user, PATTERNS, verifier, catch_all_domains):
         return
 
     mx_servers = mx_or_reason
+    mx_provider = verifier.get_mx_provider(mx_servers)
 
-    # PATTERN LOOP
+    # ---- Do catch-all test ONCE per domain ----
+    if domain in catch_all_domains:
+        is_catch_all = True
+    else:
+        test_email = f"random_{random.randint(1000,9999)}_{int(time.time())}@{domain}"
+        catch_all_result, _ = await verifier.smtp_check(test_email, mx_servers)
+        is_catch_all = bool(catch_all_result)
+        if is_catch_all:
+            catch_all_domains.add(domain)
     for idx in range(current_index, len(PATTERNS)):
         if is_pattern_blocked(domain, idx):
             continue
@@ -385,7 +492,10 @@ async def process_user_patterns(user, PATTERNS, verifier, catch_all_domains):
             log.info(f"Pattern formatting failed for {user_id} at index {idx}: {e}")
             continue
 
-        result = await verifier.verify_email_with_mx(email, user_id, mx_servers, catch_all_domains)
+        # Pass the driver into the validation function!
+        result = await verifier.verify_email_with_mx(
+            email, user_id, mx_servers, mx_provider, is_catch_all, catch_all_domains, driver
+        )
 
         if result.get("valid"):
             users.update_one(
@@ -431,44 +541,49 @@ async def process_user_patterns(user, PATTERNS, verifier, catch_all_domains):
         )
         log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
 
-# --- MAIN BATCH LOOP (ASYNC) ---
-
 async def main_loop():
     verifier = EmailVerifier(concurrency=1)
     catch_all_domains = set()
+    driver = browser_manager.open_browser()
 
-    while True:
-        pipeline = [
-            {
-                "$match": {
-                    "business_email": {"$in": ["", None, False]},
-                    "allChecked": {"$exists": False}
-                }
-            },
-            {
-                "$lookup": {
-                    "from": "company-1",
-                    "localField": "refCompanyId",
-                    "foreignField": "_id",
-                    "as": "company"
-                }
-            },
-            {
-                "$unwind": "$company"
-            },
-            {
-                "$match": {
-                    "company.email_domain": {"$exists": True, "$ne": ""}
-                }
-            },
-            { "$sort": { "createdAt": 1 }},
-            { "$limit": BATCH_SIZE }
-        ]
+    try:
+        while True:
+            pipeline = [
+                {
+                    "$match": {
+                        "business_email": {"$in": ["", None, False]},
+                        "allChecked": {"$exists": False}
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "company-1",
+                        "localField": "refCompanyId",
+                        "foreignField": "_id",
+                        "as": "company"
+                    }
+                },
+                {
+                    "$unwind": "$company"
+                },
+                {
+                    "$match": {
+                        "company.email_domain": {"$exists": True, "$ne": ""}
+                    }
+                },
+                { "$sort": { "createdAt": 1 }},
+                { "$limit": BATCH_SIZE }
+            ]
 
-        cursor = users.aggregate(pipeline)
+            cursor = users.aggregate(pipeline)
 
-        for user in cursor:
-            await process_user_patterns(user, PATTERNS, verifier, catch_all_domains)
-            
+            for user in cursor:
+                await process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains)
+    except Exception as e:
+        log.error(f"Main loop error: {e}")
+    finally:
+        if driver:
+            browser_manager.close_browser(driver)
+
 if __name__ == "__main__":
     asyncio.run(main_loop())
