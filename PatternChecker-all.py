@@ -152,6 +152,9 @@ while True:
                 "company.email_domain": {"$exists": True, "$ne": ""}
             }
         },
+        { 
+            "$sort": { "createdAt": 1 }
+        },
         { "$limit": BATCH_SIZE }
     ]
 
