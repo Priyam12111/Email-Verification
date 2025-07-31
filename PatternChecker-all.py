@@ -1,4 +1,3 @@
-from datetime import datetime
 import traceback
 from bson import ObjectId
 from deep import main, log
@@ -10,6 +9,9 @@ from deep import EmailVerifier
 import random
 import time
 from lib.browser import BrowserManager
+import os
+from datetime import datetime, timedelta
+
 
 browser_manager = BrowserManager() 
 
@@ -541,44 +543,72 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
         )
         log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
 
+BATCH_SIZE = 200
+CLAIM_TIMEOUT = 60 * 30
+WORKER_ID = os.getenv("WORKER_ID", f"worker-{os.getpid()}")
+
+def claim_one_user():
+    now = datetime.utcnow()
+    claim_expiry = now - timedelta(seconds=CLAIM_TIMEOUT)
+    user = users.find_one_and_update(
+        {
+            "business_email": {"$in": ["", None, False]},
+            "allChecked": {"$exists": False},
+            "$or": [
+                {"claimedBy": {"$exists": False}},
+                {"claimedAt": {"$lt": claim_expiry}}
+            ]
+        },
+        {
+            "$set": {
+                "claimedBy": WORKER_ID,
+                "claimedAt": now
+            }
+        },
+        sort=[("createdAt", 1)],
+        return_document=True
+    )
+    return user
+
+async def claim_batch():
+    batch = []
+    for _ in range(BATCH_SIZE):
+        user = await asyncio.to_thread(claim_one_user)
+        if not user:
+            break
+        batch.append(user)
+    return batch
+
 async def main_loop():
     verifier = EmailVerifier(concurrency=1)
     catch_all_domains = set()
     driver = browser_manager.open_browser()
-
+    company_collection = users.database['company-1']
     try:
         while True:
-            pipeline = [
-                {
-                    "$match": {
-                        "business_email": {"$in": ["", None, False]},
-                        "allChecked": {"$exists": False}
-                    }
-                },
-                {
-                    "$lookup": {
-                        "from": "company-1",
-                        "localField": "refCompanyId",
-                        "foreignField": "_id",
-                        "as": "company"
-                    }
-                },
-                {
-                    "$unwind": "$company"
-                },
-                {
-                    "$match": {
-                        "company.email_domain": {"$exists": True, "$ne": ""}
-                    }
-                },
-                { "$sort": { "createdAt": 1 }},
-                { "$limit": BATCH_SIZE }
-            ]
+            batch = await claim_batch()
+            if not batch:
+                await asyncio.sleep(5)
+                continue
 
-            cursor = users.aggregate(pipeline)
+            for user in batch:
+                company = company_collection.find_one({"_id": user.get("refCompanyId")})
+                if not company or not company.get("email_domain"):
+                    users.update_one(
+                        {"_id": user["_id"], "claimedBy": WORKER_ID},
+                        {"$unset": {"claimedBy": "", "claimedAt": ""}}
+                    )
+                    continue
 
-            for user in cursor:
                 await process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains)
+
+                users.update_one(
+                    {"_id": user["_id"], "claimedBy": WORKER_ID},
+                    {
+                        "$set": {"allChecked": True},
+                        "$unset": {"claimedBy": "", "claimedAt": ""}
+                    }
+                )
     except Exception as e:
         log.error(f"Main loop error: {e}")
     finally:
