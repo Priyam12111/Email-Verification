@@ -23,16 +23,16 @@ PATTERNS = [
     "{last}.{first}@{domain}",
     "{last_initial}.{first}@{domain}",
     "{first_initial}.{last}@{domain}",
-    "{last_initial}{first_initial}@{domain}",
-    "{last}@{domain}",
-    "{first}{last_initial}@{domain}",
-    "{first}{last}@{domain}",
-    "{first}_{last}@{domain}",
-    "{first}-{last}@{domain}",
-    "{last}{first_initial}@{domain}",
-    "{first_initial}{last_initial}@{domain}",
-    "{last_initial}{first}@{domain}",
-    "{last}{first}@{domain}",
+    # "{last_initial}{first_initial}@{domain}",
+    # "{last}@{domain}",
+    # "{first}{last_initial}@{domain}",
+    # "{first}{last}@{domain}",
+    # "{first}_{last}@{domain}",
+    # "{first}-{last}@{domain}",
+    # "{last}{first_initial}@{domain}",
+    # "{first_initial}{last_initial}@{domain}",
+    # "{last_initial}{first}@{domain}",
+    # "{last}{first}@{domain}",
 ]
 
 
@@ -119,7 +119,7 @@ def process_users_dataset(dataset, index):
     return email_user_pairs, already_verified_updates
 
 BATCH_SIZE = 100
-MAX_PATTERNS = 17 
+MAX_PATTERNS = len(PATTERNS) 
 
 # async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains):
 #     fullName = user.get("fullName", "").split()
