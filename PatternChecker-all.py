@@ -1,19 +1,23 @@
-from datetime import datetime
+from __future__ import annotations
+
+import os
+import re
+import time
+import random
+import socket
+import asyncio
 import traceback
+from datetime import datetime, timedelta, timezone
 from bson import ObjectId
-from deep import main, log
-from pymongo import UpdateOne
+from pymongo import UpdateOne, ReturnDocument
 from configs.db import users, company, catch_all_patterns, db
 from configs.logger import log
-import asyncio
 from deep import EmailVerifier
-import random
-import time
 from lib.browser import BrowserManager
 from browserValidation import browser_based_valid
 from utils.helpers import now_ist, inc_stats
 
-browser_manager = BrowserManager() 
+browser_manager = BrowserManager()
 
 PATTERNS = [
     "{first}.{last}@{domain}",
@@ -35,88 +39,103 @@ PATTERNS = [
     # "{last}{first}@{domain}",
 ]
 
+BATCH_IDLE_SLEEP_S = float(os.getenv("IDLE_SLEEP_S", "1.0"))
+LEASE_SECS = int(os.getenv("LEASE_SECS", "600"))
+RENEW_EVERY_SECS = int(os.getenv("RENEW_EVERY_SECS", "180"))     
+MAX_ATTEMPTS_PER_USER = int(os.getenv("MAX_ATTEMPTS", "5"))
 
-def generate_email_patterns(firstName, lastName, domain, index, user_id):
-    patterns = []
+WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
+
+EMAIL_SYNTAX_RE = re.compile(
+    r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
+    re.IGNORECASE
+)
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def iso_now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def ensure_indexes():
+    """
+    Run once (or harmlessly on startup). Keeps the claim query fast.
+    """
     try:
-        pattern = PATTERNS[index]
-        email = pattern.format(
-            first=firstName,
-            last=lastName,
-            domain=domain,
-            first_initial=firstName[0] if firstName else '',
-            last_initial=lastName[0] if lastName else ''
-        ).lower().replace('"', '').replace("(", "").replace(")", "")
-        patterns.append((email, str(user_id)))
+        users.create_index([("business_email", 1), ("allChecked", 1), ("lock.lease_until", 1)])
+        users.create_index([("createdAt", 1)])
+        users.create_index([("lock.owner", 1)])
+        company.create_index([("email_domain", 1)])
+        catch_all_patterns.create_index([("domain", 1)], unique=False)
     except Exception as e:
-        log.info(f"Error generating pattern: {e}")
-    return patterns
+        log.warning(f"ensure_indexes() warning: {e}")
 
-def is_pattern_blocked(domain, index):
+def is_pattern_blocked(domain: str, index: int) -> bool:
     entry = catch_all_patterns.find_one({"domain": domain, "invalid_patterns": index})
     return entry is not None
 
-def block_pattern_for_domain(domain, index):
+def block_pattern_for_domain(domain: str, index: int) -> None:
     catch_all_patterns.update_one(
         {"domain": domain},
         {"$addToSet": {"invalid_patterns": index}},
         upsert=True
     )
 
-def process_users_dataset(dataset, index):
-    email_user_pairs = []
-    already_verified_updates = []
 
-    for data in dataset:
-        fullName = data.get("fullName", "").split(" ")
-        firstName = fullName[0] if len(fullName) > 0 else ""
-        lastName = fullName[-1] if len(fullName) > 1 else ""
-        refCompanyId = data.get("refCompanyId")
+# def process_users_dataset(dataset, index):
+#     email_user_pairs = []
+#     already_verified_updates = []
 
-        comp = company.find_one({"_id": refCompanyId}) if refCompanyId else None
-        if not comp:
-            continue
+#     for data in dataset:
+#         fullName = data.get("fullName", "").split(" ")
+#         firstName = fullName[0] if len(fullName) > 0 else ""
+#         lastName = fullName[-1] if len(fullName) > 1 else ""
+#         refCompanyId = data.get("refCompanyId")
 
-        companyDomain = comp.get("email_domain")
-        company_pattern_index = comp.get("verified_pattern_index", index)
+#         comp = company.find_one({"_id": refCompanyId}) if refCompanyId else None
+#         if not comp:
+#             continue
 
-        if not companyDomain:
-            continue
+#         companyDomain = comp.get("email_domain")
+#         company_pattern_index = comp.get("verified_pattern_index", index)
 
-        # Case 1: Company already has verified pattern → skip validation
-        if "verified_pattern_index" in comp:
-            try:
-                email = PATTERNS[company_pattern_index].format(
-                    first=firstName,
-                    last=lastName,
-                    domain=companyDomain,
-                    first_initial=firstName[0] if firstName else '',
-                    last_initial=lastName[0] if lastName else ''
-                ).lower().replace('"', '').replace("(", "").replace(")", "")
+#         if not companyDomain:
+#             continue
 
-                already_verified_updates.append(
-                    UpdateOne(
-                        {"_id": data.get("_id")},
-                        {"$set": {
-                            "business_email": email,
-                            "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "email_pattern_source": "company_verified"
-                        }}
-                    )
-                )
-            except Exception as e:
-                log.info(f"Failed to format email for user {data.get('_id')}: {e}")
-            continue
+#         # Case 1: Company already has verified pattern → skip validation
+#         if "verified_pattern_index" in comp:
+#             try:
+#                 email = PATTERNS[company_pattern_index].format(
+#                     first=firstName,
+#                     last=lastName,
+#                     domain=companyDomain,
+#                     first_initial=firstName[0] if firstName else '',
+#                     last_initial=lastName[0] if lastName else ''
+#                 ).lower().replace('"', '').replace("(", "").replace(")", "")
 
-        # Case 2: Pattern not yet verified, proceed only if not blocked
-        if not is_pattern_blocked(companyDomain, company_pattern_index):
-            pairs = generate_email_patterns(
-                firstName, lastName, companyDomain,
-                company_pattern_index, data.get("_id")
-            )
-            email_user_pairs.extend(pairs)
+#                 already_verified_updates.append(
+#                     UpdateOne(
+#                         {"_id": data.get("_id")},
+#                         {"$set": {
+#                             "business_email": email,
+#                             "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+#                             "email_pattern_source": "company_verified"
+#                         }}
+#                     )
+#                 )
+#             except Exception as e:
+#                 log.info(f"Failed to format email for user {data.get('_id')}: {e}")
+#             continue
 
-    return email_user_pairs, already_verified_updates
+#         # Case 2: Pattern not yet verified, proceed only if not blocked
+#         if not is_pattern_blocked(companyDomain, company_pattern_index):
+#             pairs = generate_email_patterns(
+#                 firstName, lastName, companyDomain,
+#                 company_pattern_index, data.get("_id")
+#             )
+#             email_user_pairs.extend(pairs)
+
+#     return email_user_pairs, already_verified_updates
 
 BATCH_SIZE = 100
 MAX_PATTERNS = len(PATTERNS) 
@@ -227,33 +246,126 @@ MAX_PATTERNS = len(PATTERNS)
 #         log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
 
 
-import re
-from bson import ObjectId
-from datetime import datetime
+def claim_one_user():
+    """
+    Atomically claim ONE user for this worker. No $lookup here — keep it light.
+    Company/domain checks are done AFTER claiming.
+    """
+    lease_until = now_utc() + timedelta(seconds=LEASE_SECS)
 
-EMAIL_SYNTAX_RE = re.compile(
-    r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
-    re.IGNORECASE
-)
+    doc = users.find_one_and_update(
+        {
+            # needs work
+            "business_email": {"$in": ["", None, False]},
+            "allChecked": {"$exists": False},
 
-async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains):
-    print("here2")
+            # not currently leased or lease expired
+            "$or": [
+                {"lock": {"$exists": False}},
+                {"lock.lease_until": {"$lt": now_utc()}}
+            ],
+
+            # cap attempts
+            "$expr": {
+                "$lt": [
+                    {"$ifNull": ["$lock.attempts", 0]},
+                    MAX_ATTEMPTS_PER_USER
+                ]
+            },
+        },
+        {
+            "$set": {
+                "lock.owner": WORKER_ID,
+                "lock.lease_until": lease_until
+            },
+            "$inc": {"lock.attempts": 1}
+        },
+        sort=[("createdAt", 1)],  # deterministic order
+        return_document=ReturnDocument.AFTER
+    )
+    return doc
+
+def renew_lease(user_id: ObjectId):
+    users.update_one(
+        {"_id": user_id, "lock.owner": WORKER_ID},
+        {"$set": {"lock.lease_until": now_utc() + timedelta(seconds=LEASE_SECS)}}
+    )
+
+def release_lock(user_id: ObjectId):
+    users.update_one(
+        {"_id": user_id, "lock.owner": WORKER_ID},
+        {"$unset": {"lock": ""}}
+    )
+
+async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains: set[str]):
+    """
+    Uses your existing provider-based browser validation.
+    Renews lease periodically so long-running checks don't lose their claim.
+    """
     fullName = user.get("fullName", "").split()
     firstName = fullName[0] if len(fullName) > 0 else ""
     lastName  = fullName[-1] if len(fullName) > 1 else ""
-    user_id   = str(user["_id"])
+    user_id   = ObjectId(user["_id"])
     company_id = user.get("refCompanyId")
 
-    company_doc = company.find_one({"_id": company_id}) if company_id else None
-    domain = company_doc.get("email_domain") if company_doc else None
+    comp = company.find_one({"_id": company_id}) if company_id else None
+    domain = comp.get("email_domain") if comp else None
     if not domain:
+        # nothing sensible to do; mark checked and exit
+        users.update_one(
+            {"_id": user_id},
+            {"$set": {"allChecked": True, "v6_checked": iso_now_str()}}
+        )
+        return
+
+    # If company already has a verified pattern, short-circuit
+    if comp and "verified_pattern_index" in comp:
+        idx = comp.get("verified_pattern_index", 0)
+        try:
+            email = (
+                PATTERNS[idx]
+                .format(
+                    first=firstName,
+                    last=lastName,
+                    domain=domain,
+                    first_initial=firstName[0] if firstName else '',
+                    last_initial=lastName[0] if lastName else ''
+                )
+                .lower()
+                .replace('"', '')
+                .replace("(", "")
+                .replace(")", "")
+            )
+        except Exception as e:
+            log.info(f"Failed to format fast-path email for user {user_id}: {e}")
+            email = None
+
+        if email:
+            users.update_one(
+                {"_id": user_id},
+                {"$set": {
+                    "business_email": email,
+                    "modifiedAt_pattern": iso_now_str(),
+                    "email_pattern_source": "company_verified",
+                    "email_verified": True,  # optional
+                    "v6_checked": iso_now_str(),
+                    "v6": idx
+                }}
+            )
         return
 
     current_index = user.get("v6", 0)
+    last_renew = time.monotonic()
 
     for idx in range(current_index, len(PATTERNS)):
+        # renew lease heartbeat inside loop (in case this is slow work)
+        if time.monotonic() - last_renew > RENEW_EVERY_SECS:
+            renew_lease(user_id)
+            last_renew = time.monotonic()
+
         if is_pattern_blocked(domain, idx):
             continue
+
         try:
             email = (
                 PATTERNS[idx]
@@ -273,22 +385,18 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
             log.info(f"Pattern formatting failed for {user_id} at index {idx}: {e}")
             continue
 
-        # ---- Hardcoded provider attempts ----
+        # Provider attempts (your existing browser-based flow)
         valid = False
         used_provider = None
-        
-        print("here1")
 
         for provider in ("google", "microsoft"):
             try:
-                print("before browser")
                 is_browser_valid = browser_based_valid(driver, email, provider)
-                print('browser_based_valid', is_browser_valid)
                 result = {"valid": is_browser_valid}
             except Exception as e:
-                print("exception", str(e))
+                log.info(f"browser_based_valid exception for {email} ({provider}): {e}")
                 result = {"valid": False}
-            
+
             inc_stats(queries=1)
 
             if result.get("valid"):
@@ -299,97 +407,79 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
 
         if valid:
             users.update_one(
-                {"_id": ObjectId(user_id)},
+                {"_id": user_id},
                 {"$set": {
                     "business_email": email,
-                    "modifiedAt_pattern": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "modifiedAt_pattern": iso_now_str(),
                     "email_verified": True,
                     "email_verified_mode": "provider_assumed",
                     "email_verified_provider_assumed": used_provider,
-                    "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "v6_checked": iso_now_str(),
                     "v6": idx
                 }}
             )
             log.info(f"[User Updated] {user_id} - {email} using pattern index {idx} (assumed {used_provider})")
 
             if company_id:
-                pass
                 company.update_one(
                     {"_id": company_id},
                     {"$set": {
                         "verified_pattern_index": idx,
                         "verified_patterns": [PATTERNS[idx]],
-                        "verifiedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "verifiedAt": iso_now_str(),
                         "provider_assumed": used_provider
                     }}
                 )
             break
         else:
             users.update_one(
-                {"_id": ObjectId(user_id)},
+                {"_id": user_id},
                 {"$set": {
                     "v6": idx + 1,
-                    "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "v6_checked": iso_now_str()
                 }}
             )
             log.info(f"[Pattern Invalid] {email} - next index: {idx + 1}")
     else:
         users.update_one(
-            {"_id": ObjectId(user_id)},
+            {"_id": user_id},
             {"$set": {
                 "v6": len(PATTERNS),
                 "allChecked": True,
-                "v6_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "v6_checked": iso_now_str()
             }}
         )
         log.info(f"[All Patterns Tried] {user_id} - domain: {domain}")
 
-
 async def main_loop():
+    ensure_indexes()
+
     verifier = EmailVerifier(concurrency=1)
-    catch_all_domains = set()
+    catch_all_domains: set[str] = set()
     driver = browser_manager.open_browser()
 
     try:
-        print("here3")
+        log.info(f"Worker {WORKER_ID} started with lease={LEASE_SECS}s renew={RENEW_EVERY_SECS}s")
         while True:
-            pipeline = [
-                {
-                    "$match": {
-                        "business_email": {"$in": ["", None, False]},
-                        "allChecked": {"$exists": False}
-                    }
-                },
-                {
-                    "$lookup": {
-                        "from": "company-1",
-                        "localField": "refCompanyId",
-                        "foreignField": "_id",
-                        "as": "company"
-                    }
-                },
-                {
-                    "$unwind": "$company"
-                },
-                {
-                    "$match": {
-                        "company.email_domain": {"$exists": True, "$ne": ""}
-                    }
-                },
-                { "$sort": { "createdAt": 1 }},
-                { "$limit": BATCH_SIZE }
-            ]
+            # Atomically claim one user
+            user = claim_one_user()
+            if not user:
+                time.sleep(BATCH_IDLE_SLEEP_S)
+                continue
 
-            cursor = users.aggregate(pipeline)
-            print('after aggregate pipeline')
+            uid = user["_id"]
 
-            for user in cursor:
+            try:
                 await process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains)
-    except Exception as e:
-        log.error(f"Main loop error: {e}")
+            except Exception as e:
+                log.error(f"Worker {WORKER_ID} failed for user {uid}: {e}\n{traceback.format_exc()}")
+            finally:
+                release_lock(uid)
+
     finally:
         if driver:
             browser_manager.close_browser(driver)
+        log.info(f"Worker {WORKER_ID} stopped.")
 
 if __name__ == "__main__":
     asyncio.run(main_loop())
