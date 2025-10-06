@@ -6,7 +6,8 @@ from bson import ObjectId
 from lib.helpers import get_company_to_verify
 
 # RabbitMQ connection parameters
-cloudamqp_url = 'amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg'
+# cloudamqp_url = 'amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg'
+cloudamqp_url = 'amqps://ailtamhb:U9IxT1znd6_wjBhXaAx-AO0YE44FqRMJ@gorilla.lmq.cloudamqp.com/ailtamhb'
 queue_name = "company_details"
 
 class CustomEncoder(json.JSONEncoder):
@@ -25,6 +26,7 @@ def main():
             # Connect to RabbitMQ
             parameters = pika.URLParameters(cloudamqp_url)
             connection = pika.BlockingConnection(parameters)
+            print(f"Connected to RabbitMQ. {connection}")
             channel = connection.channel()
 
             print("Declaring queue...")

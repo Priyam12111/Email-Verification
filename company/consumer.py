@@ -31,7 +31,8 @@ from lib.constants import COLLECTION_COMPANY, COLLECTION_SYSTEM
 
 filename = formatted_time("%Y%m%d%H%M%S")
 
-cloudamqp_url = 'amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg'
+# cloudamqp_url = 'amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg'
+cloudamqp_url = 'amqps://ailtamhb:U9IxT1znd6_wjBhXaAx-AO0YE44FqRMJ@gorilla.lmq.cloudamqp.com/ailtamhb'
 queue_name = "company_details"
 
 
@@ -212,7 +213,9 @@ def process(data):
         chk_company = {
             'status': False,}
         if not chk_company['status']:
+            print("here1")
             engine = create_driver()
+            print('engine created')
             engine.maximize_window()
             company_name = row['name']
             try:

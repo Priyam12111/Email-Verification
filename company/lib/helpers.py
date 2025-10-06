@@ -1,3 +1,48 @@
+
+from pathlib import Path
+import sys, types, importlib.util
+
+ROOT = Path(__file__).resolve().parents[2]          # .../Email-Verification
+CFG_DIR = ROOT / "configs"
+
+def _ensure_virtual_package(pkg_name: str, pkg_dir: Path):
+    if pkg_name not in sys.modules:
+        pkg = types.ModuleType(pkg_name)
+        pkg.__path__ = [str(pkg_dir)]               # make it a real package
+        sys.modules[pkg_name] = pkg
+
+def _load_pkg_submodule(pkg_name: str, submod_name: str, file_path: Path):
+    full_name = f"{pkg_name}.{submod_name}"
+    spec = importlib.util.spec_from_file_location(full_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module {full_name} from {file_path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[full_name] = mod                    # register before exec
+    spec.loader.exec_module(mod)
+    return mod
+
+# 1) make virtual 'configs' package
+_ensure_virtual_package("configs", CFG_DIR)
+# 2) load configs.db under that package
+db_module = _load_pkg_submodule("configs", "db", CFG_DIR / "db.py")
+
+# Exported handles
+db = db_module.db
+users = db_module.users
+company = db_module.company
+# -------------------------------------------------------------------------------
+
+# now safe to import other project modules that may rely on a global `db`
+from datetime import datetime
+import pytz
+from bson import ObjectId
+
+from lib.constants import COLLECTION_COMPANY
+import importlib
+mg = importlib.import_module("lib.mongo_connection")  # import the MODULE, not the function
+mg.db = db                                            # <-- inject db so mg_aggregate can use it
+from lib.configs import envs
+
 from datetime import datetime
 from pymongo import MongoClient
 from lib.constants import COLLECTION_COMPANY
@@ -6,9 +51,6 @@ from lib.configs import envs
 from bson import ObjectId
 import pytz
 
-client = MongoClient(envs['MONGO_STRING'])
-db_name = envs['DATABASE_NAME']
-db = client[db_name]
 company_collection = db.company
 users_collection = db.users
 credentials_collection = db.credentials
@@ -141,10 +183,10 @@ def get_company_to_verify(offset, limit=10):
             }
         ]
 
-        data = mg_aggregate(COLLECTION_COMPANY, cond)
+        data = mg_aggregate(COLLECTION_COMPANY, cond, db)
 
         return data
 
     except Exception as e:
-        print(f"Error retrieving company")
+        print(f"Error retrieving company" , e)
         return []
