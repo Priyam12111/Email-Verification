@@ -318,7 +318,8 @@ def _find_users_with_verified_company(limit:int=50):
 
         # join company
         {"$lookup": {
-            "from": company.name,            # PyMongo collection name
+            # "from": company.name,            # PyMongo collection name
+            "from": 'company-1',            # PyMongo collection name
             "localField": "refCompanyId",
             "foreignField": "_id",
             "as": "comp"
@@ -333,13 +334,12 @@ def _find_users_with_verified_company(limit:int=50):
         }},
 
         # company must have pattern and a usable domain
-        {"$match": {
-            "comp_domain": {"$type": "string", "$ne": ""},
-            "$or": [
-                {"comp.verified_pattern_index": {"$type": "number"}},
-                {"comp.verified_patterns.0": {"$exists": True}}
-            ]
-        }},
+        # {"$match": {
+        #     "comp_domain": {"$type": "string", "$ne": ""},
+        #     "$or": [
+        #         {"comp.verified_patterns.0": {"$exists": True}}
+        #     ]
+        # }},
 
         {"$sort": {"createdAt": 1}},
         {"$limit": limit},
@@ -401,12 +401,19 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
 
     comp = company.find_one({"_id": company_id}) if company_id else None
     domain = comp.get("email_domain") or comp.get("domain") if comp else None
-    if not domain:
-        # users.update_one(
-        #     {"_id": user_id},
-        #     {"$set": {"allChecked": True, "v6_checked": iso_now_str()}}
-        # )
-        return
+    name = comp.get("name")
+    if not domain or not name:
+        users.update_one(
+            {"_id": user_id},
+            {"$set": {
+                "allChecked": True,
+                "skip_reason": f"missing {'domain' if not domain else 'name'} for company {company_id}",
+                "v6_checked": iso_now_str(),
+                # "v6": len(PATTERNS)
+            }}
+        )
+        log.info(f"[SKIP] user={user_id} company={company_id} reason=missing Domain:{domain} Name:{name}")
+        return        
 
     if comp:
         idx = comp.get("verified_pattern_index")
@@ -450,6 +457,10 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
                         "v6": idx
                     }}
                 )
+                log.info(f"[process_user_patterns] FAST-PATH set email for user={user_id} idx={idx} email={email}")
+            else:
+                log.warning(f"[process_user_patterns] FAST-PATH email None for user={user_id} idx={idx}")
+
             return
 
     current_index = user.get("v6", 0)
@@ -568,6 +579,7 @@ async def main_loop():
                 continue
 
             uid = user["_id"]
+            print("user found", uid)
 
             try:
                 await process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains)
