@@ -257,7 +257,8 @@ def claim_one_user():
         {
             # needs work
             "business_email": {"$in": ["", None, False]},
-            "allChecked": {"$exists": False},
+            # "allChecked": {"$exists": False},
+            "allChecked": {"$ne": True},
 
             # not currently leased or lease expired
             "$or": [
@@ -281,6 +282,96 @@ def claim_one_user():
             "$inc": {"lock.attempts": 1}
         },
         sort=[("createdAt", 1)],  # deterministic order
+        return_document=ReturnDocument.AFTER
+    )
+    return doc
+
+def _base_user_filter(now: datetime):
+    return {
+        # needs work
+        "business_email": {"$in": ["", None, False]},
+        "allChecked": {"$ne": True},
+
+        # not currently leased or lease expired
+        "$or": [
+            {"lock": {"$exists": False}},
+            {"lock.lease_until": {"$lt": now}}
+        ],
+
+        # cap attempts
+        "$expr": {
+            "$lt": [
+                {"$ifNull": ["$lock.attempts", 0]},
+                MAX_ATTEMPTS_PER_USER
+            ]
+        },
+    }
+
+def _find_users_with_verified_company(limit:int=50):
+    """
+    Returns a small batch of user _ids whose company already has a verified pattern.
+    We check either verified_pattern_index or a non-empty verified_patterns array.
+    We also require company domain to exist (email_domain or domain).
+    """
+    pipeline = [
+        {"$match": _base_user_filter(now_utc())},
+
+        # join company
+        {"$lookup": {
+            "from": company.name,            # PyMongo collection name
+            "localField": "refCompanyId",
+            "foreignField": "_id",
+            "as": "comp"
+        }},
+        {"$unwind": "$comp"},
+
+        # compute a {domain} from email_domain || domain
+        {"$addFields": {
+            "comp_domain": {
+                "$ifNull": ["$comp.email_domain", "$comp.domain"]
+            }
+        }},
+
+        # company must have pattern and a usable domain
+        {"$match": {
+            "comp_domain": {"$type": "string", "$ne": ""},
+            "$or": [
+                {"comp.verified_pattern_index": {"$type": "number"}},
+                {"comp.verified_patterns.0": {"$exists": True}}
+            ]
+        }},
+
+        {"$sort": {"createdAt": 1}},
+        {"$limit": limit},
+        {"$project": {"_id": 1}}
+    ]
+
+    return list(users.aggregate(pipeline, allowDiskUse=False))
+
+def claim_one_user_verified_company() -> dict | None:
+    lease_until = now_utc() + timedelta(seconds=LEASE_SECS)
+
+    # fetch a small candidate pool first (read-only)
+    candidates = _find_users_with_verified_company(limit=50)
+    if not candidates:
+        return None
+
+    ids = [c["_id"] for c in candidates]
+
+    # atomically claim one from that pool
+    doc = users.find_one_and_update(
+        {
+            "_id": {"$in": ids},
+            **_base_user_filter(now_utc())
+        },
+        {
+            "$set": {
+                "lock.owner": WORKER_ID,
+                "lock.lease_until": lease_until
+            },
+            "$inc": {"lock.attempts": 1}
+        },
+        sort=[("createdAt", 1)],
         return_document=ReturnDocument.AFTER
     )
     return doc
@@ -309,50 +400,57 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
     company_id = user.get("refCompanyId")
 
     comp = company.find_one({"_id": company_id}) if company_id else None
-    domain = comp.get("email_domain") if comp else None
+    domain = comp.get("email_domain") or comp.get("domain") if comp else None
     if not domain:
-        # nothing sensible to do; mark checked and exit
-        users.update_one(
-            {"_id": user_id},
-            {"$set": {"allChecked": True, "v6_checked": iso_now_str()}}
-        )
+        # users.update_one(
+        #     {"_id": user_id},
+        #     {"$set": {"allChecked": True, "v6_checked": iso_now_str()}}
+        # )
         return
 
-    # If company already has a verified pattern, short-circuit
-    if comp and "verified_pattern_index" in comp:
-        idx = comp.get("verified_pattern_index", 0)
-        try:
-            email = (
-                PATTERNS[idx]
-                .format(
-                    first=firstName,
-                    last=lastName,
-                    domain=domain,
-                    first_initial=firstName[0] if firstName else '',
-                    last_initial=lastName[0] if lastName else ''
+    if comp:
+        idx = comp.get("verified_pattern_index")
+        if idx is None:
+            vps = comp.get("verified_patterns")
+            if isinstance(vps, list) and vps:
+                try:
+                    idx = PATTERNS.index(vps[0])
+                except ValueError:
+                    idx = None
+
+        if idx is not None:
+            try:
+                email = (
+                    PATTERNS[idx]
+                    .format(
+                        first=firstName,
+                        last=lastName,
+                        domain=domain,
+                        first_initial=firstName[0] if firstName else '',
+                        last_initial=lastName[0] if lastName else ''
+                    )
+                    .lower()
+                    .replace('"', '')
+                    .replace("(", "")
+                    .replace(")", "")
                 )
-                .lower()
-                .replace('"', '')
-                .replace("(", "")
-                .replace(")", "")
-            )
-        except Exception as e:
-            log.info(f"Failed to format fast-path email for user {user_id}: {e}")
-            email = None
+            except Exception as e:
+                log.info(f"Failed to format fast-path email for user {user_id}: {e}")
+                email = None
 
-        if email:
-            users.update_one(
-                {"_id": user_id},
-                {"$set": {
-                    "business_email": email,
-                    "modifiedAt_pattern": iso_now_str(),
-                    "email_pattern_source": "company_verified",
-                    "email_verified": True,  # optional
-                    "v6_checked": iso_now_str(),
-                    "v6": idx
-                }}
-            )
-        return
+            if email:
+                users.update_one(
+                    {"_id": user_id},
+                    {"$set": {
+                        "business_email": email,
+                        "modifiedAt_pattern": iso_now_str(),
+                        "email_pattern_source": "company_verified",
+                        "email_verified": True,
+                        "v6_checked": iso_now_str(),
+                        "v6": idx
+                    }}
+                )
+            return
 
     current_index = user.get("v6", 0)
     last_renew = time.monotonic()
@@ -462,9 +560,11 @@ async def main_loop():
         log.info(f"Worker {WORKER_ID} started with lease={LEASE_SECS}s renew={RENEW_EVERY_SECS}s")
         while True:
             # Atomically claim one user
-            user = claim_one_user()
+            # user = claim_one_user()
+            user = claim_one_user_verified_company()
             if not user:
                 time.sleep(BATCH_IDLE_SLEEP_S)
+                print("no user found")
                 continue
 
             uid = user["_id"]
