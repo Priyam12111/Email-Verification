@@ -27,7 +27,7 @@ class CustomEncoder(json.JSONEncoder):
 
 def main():
     offset = 0
-    limit = 10
+    limit = 100
     while True:
         try:
             print("Connecting to RabbitMQ...")
