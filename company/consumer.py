@@ -11,6 +11,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import WebDriverException
+from lib.helpers import db
 
 from time import sleep
 
@@ -26,7 +27,7 @@ import random
 from urllib.parse import urlsplit, urlunparse, urlparse
 
 from lib.constants import COLLECTION_COMPANY, COLLECTION_SYSTEM
-# from lib.mongo_connection import mg_list, mg_one, mg_update, mg_aggregate
+from lib.mongo_connection import mg_list, mg_one, mg_update, mg_aggregate
 # from lib.helpers import get_company_to_verify
 
 filename = formatted_time("%Y%m%d%H%M%S")
@@ -71,12 +72,10 @@ def verify_domain2(url):
         domain_url = domain_url
     elif len(domain_url.split('.')) >= 3:
         domain_url = False
-    # return domain_url.strip()
     if isinstance(domain_url, str):
         return domain_url.strip()
     else:
-        # Handle the case where domain_url is not a string
-        return None  # or some appropriate value
+        return None
 
 
 def verify_domain(url):
@@ -94,14 +93,12 @@ def verify_domain(url):
 
     # Split the domain into parts and return the domain including subdomains
     domain_parts = domain_url.split('.')
-    
+
     if len(domain_parts) >= 2:
-        # Return the domain and subdomains
         return '.'.join(domain_parts)
     else:
-        # If the domain is invalid
         return None
-    
+
 
 def sub_domain(url):
     pattern = r"https?://([^/.]+)\."
@@ -163,7 +160,7 @@ def create_driver(proxy=None):
 
     opt.add_experimental_option("debuggerAddress", "localhost:8989")
     opt.add_argument('--disable-blink-features=AutomationControlled')
-    
+
     # Enhanced fingerprint protection
     opt.add_argument("--disable-webgl")  # WebGL fingerprint protection
     opt.add_argument("--disable-site-isolation-trials")
@@ -176,18 +173,8 @@ def create_driver(proxy=None):
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
     opt.add_argument(f'--user-agent={user_agent}')
 
-    # Disable automation flags
-    # opt.add_experimental_option("excludeSwitches", ["enable-automation", "load-extension"])
-    # opt.add_experimental_option("useAutomationExtension", False)
-
-    # Optional: Use existing browser profile (create one manually first)
-    # opt.add_argument("--user-data-dir=/path/to/your/chrome/profile")
-
-    # Optional: For headless mode (uncomment if needed)
-    # opt.add_argument('--headless=new')  # New headless mode in Chrome 109+
-    # opt.add_argument('--window-size=1920,1080')  # Set resolution when headless
     driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()), 
+        service=Service(ChromeDriverManager().install()),
         options=opt
     )
 
@@ -204,14 +191,72 @@ def create_driver(proxy=None):
     return driver
 
 
+def is_directory_or_social(url: str) -> bool:
+    """Filter out directories and social sites that are not official websites."""
+    bad_hosts = [
+        "linkedin.com", "facebook.com", "instagram.com", "x.com", "twitter.com",
+        "youtube.com", "crunchbase.com", "angel.co", "glassdoor.com",
+        "indeed.com", "g2.com", "capterra.com", "wikipedia.org",
+        "ycombinator.com", "github.com", "play.google.com", "apps.apple.com"
+    ]
+    u = url.lower()
+    return any(host in u for host in bad_hosts)
+
+
+def prefer_root_like(url: str) -> int:
+    """
+    Small heuristic to prefer likely homepages:
+      - penalize deep paths and query
+      - reward pure root or short paths like '/' or '/home'
+    Returns a score to add to similarity (0..20).
+    """
+    try:
+        p = urlsplit(url)
+        path = p.path or "/"
+        bonus = 0
+        if path in ["/", "/home", "/en", "/index.html", "/index.htm"]:
+            bonus += 12
+        # penalize long paths
+        depth = len([seg for seg in path.split("/") if seg])
+        if depth == 0:
+            bonus += 6
+        elif depth == 1:
+            bonus += 3
+        # penalize heavy querystrings
+        if p.query:
+            bonus -= 4
+        # de-bonus for obvious blog/news subpaths
+        if any(seg in path.lower() for seg in ["blog", "news", "about", "careers"]):
+            bonus -= 2
+        return max(0, bonus)
+    except:
+        return 0
+
+
+def hostname_contains_company(host: str, company_name: str) -> int:
+    """
+    Reward if hostname contains normalized company tokens (adds up to ~10).
+    """
+    try:
+        host = host.lower()
+        # basic normalization of company name
+        tokens = re.sub(r"[^a-z0-9 ]", " ", company_name.lower()).split()
+        tokens = [t for t in tokens if len(t) > 2]  # ignore tiny bits
+        score = 0
+        for t in tokens[:3]:
+            if t in host:
+                score += 4
+        return min(score, 12)
+    except:
+        return 0
+
 
 def process(data):
     sleep_time_arr = [1, 2, 3, 4, 5, 6, 7]
     data_add = 0
     data_exist = 0
     for index, row in enumerate(data):
-        chk_company = {
-            'status': False,}
+        chk_company = {'status': False}
         if not chk_company['status']:
             print("here1")
             engine = create_driver()
@@ -220,141 +265,108 @@ def process(data):
             company_name = row['name']
             try:
                 try:
+                    # --- DuckDuckGo search for company domain (instead of LinkedIn) ---
                     com_name = encoded_string(company_name.replace(' | ', ' '))
                     random_sleep_time = random.choice(sleep_time_arr)
                     sleep(random_sleep_time)
-                    g_url = f'https://html.duckduckgo.com/html?q=%27{com_name}%27+linkedin.com%2Fcompany'
+
+                    # Use DuckDuckGo HTML endpoint (works well without heavy JS)
+                    # Avoid social results; bias towards official website.
+                    g_url = (
+                        f'https://html.duckduckgo.com/html'
+                        f'?q={com_name}+official+website+-linkedin+-facebook+-twitter+-instagram+-crunchbase'
+                    )
+                    print(f"🔍 Searching DuckDuckGo: {g_url}")
                     engine.get(g_url)
                     sleep(5)
-                    
-                    # Extract and print top 10 links
-                    search_results = engine.find_elements('css selector', '.result__title')
+
+                    # Collect top results
+                    # Selector for DDG HTML version results
+                    search_results = engine.find_elements(By.CSS_SELECTOR, '.result__title a')
                     values = {}
-                    # Check if "company/school" is present in the lowercase URL
-                    check_keywords = [
-                        "linkedin.com/company",
-                        "linkedin.com/school"
-                    ]
-                    for s_index, result in enumerate(search_results[:20]):
-                        link = extract_url(result.find_element('css selector', 'a').get_attribute('href'))
-                        h3 = result.find_element('css selector', 'a').get_attribute('innerText')
+                    scored_meta = {}
 
-                        # print(h3, link)
-                        pattern = re.compile("|".join(check_keywords))
-                        match_keyword = pattern.search(link.lower())
-                        if match_keyword:
-                            values[link] = match_string_percentage(company_name, remove_keyword(h3))
+                    for s_index, a in enumerate(search_results[:20]):
+                        raw_href = a.get_attribute('href') or ''
+                        link = extract_url(raw_href).strip()
+                        title = (a.text or '').strip()
 
-                    sleep(1)
+                        if not link:
+                            continue
+                        if is_directory_or_social(link):
+                            continue
+
+                        # Similarity on title
+                        sim_score = match_string_percentage(company_name, title)
+
+                        # Heuristics: prefer root/homepage-like URLs and hostnames containing company tokens
+                        try:
+                            host = urlsplit(link).netloc or ''
+                        except:
+                            host = ''
+
+                        bonus = prefer_root_like(link) + hostname_contains_company(host, company_name)
+
+                        # Final score out of ~132 (100 + ~20 + ~12); we'll compare on this
+                        final_score = sim_score + bonus
+
+                        values[link] = final_score
+                        scored_meta[link] = {
+                            "title": title,
+                            "sim_score": sim_score,
+                            "bonus": bonus
+                        }
+
                     extra_data = {'status': True, 'dt_status': True, 'modifiedAt': str(formatted_time())}
+
                     if len(values):
-                        # Find the highest value and its key
-                        link = max(values, key=values.get)
-                        highest_value = values[link]
-                        print("Highest value:", str(formatted_time()), highest_value, link)
+                        # Pick best URL
+                        best_url = max(values, key=values.get)
+                        best_score = values[best_url]
+                        meta = scored_meta.get(best_url, {})
+                        print(
+                            f"🏆 Best match: {best_url} | final={best_score} "
+                            f"(title_sim={meta.get('sim_score')} bonus={meta.get('bonus')})"
+                        )
 
-                        if highest_value > 93:
-                            # add data
-                            link = url_remove_query(link)
-                            replace_txt = main_domain(link).replace('.', '-')
-                            final_domain = link.replace(main_domain(link), f'{replace_txt}.translate.goog')
-                            if 'linkedin.com/school' in link:
-                                translate_url = link
+                        # Normalize URL (remove tracking/query)
+                        best_url_clean = url_remove_query(best_url)
+                        extra_data['publicUrl'] = best_url_clean
+
+                        # Verify/derive domain
+                        try:
+                            dom = verify_domain(best_url_clean)
+                            if dom:
+                                extra_data['email_domain'] = dom
+                                extra_data['email_domain_verify'] = True
+                                print(f"✅ Verified domain: {dom}")
                             else:
-                                translate_url = f'{final_domain}?_x_tr_sl={source_lang(link)}&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=sc'
+                                extra_data['dt_reason'] = 'Unable to extract domain from best URL'
+                                print("❌ Unable to extract domain properly")
+                        except Exception as e:
+                            extra_data['dt_reason'] = f'Verify domain error: {e}'
+                            print(f"Error verifying domain: {e}")
 
-                            print(f'urls 1: {final_domain} == {translate_url} = {link}')
-
-                            engine.get(translate_url)
-                            sleep(5)
-                            engine.implicitly_wait(4)
-                            # from selenium.webdriver.common.action_chains import ActionChains
+                        # Optional: click-through small move to reduce bot-detection
+                        try:
                             actions = ActionChains(engine)
                             actions.move_by_offset(20, 200).click().perform()
+                            sleep(1)
+                        except Exception:
+                            pass
 
-                            sleep(2)
-                            engine.implicitly_wait(2)
-                            extra_data['publicUrl'] = link
-                            # search_results2 = engine.find_elements('css selector', '.tF2Cxc')
-                            elements = engine.find_elements('css selector',
-                                                            '.mb-2.flex.papabear\\:mr-3.mamabear\\:mr-3.babybear\\:flex-wrap')
-                            sleep(2)
-                            industries_arr = ['Sector', 'Professional field', 'industry']
-                            types_arr = ['Guy', 'type', 'Art', 'category']
-                            founded_arr = ['Founding date', 'Established', 'establish', 'Foundedwhen', 'Foundation',
-                                            'Foundedin']
-                            specialties_arr = ['Specializations', 'Sectors of expertise', 'bailiwick', 'field', 'Areas',
-                                                'Specialization', 'Specialty']
-                            headquarters_arr = ['Head office', 'Site', 'Thirst']
-                            website_arr = ['website']
-                            companysize_arr = ['scale', 'Sizeofthecompany']
-                            # print(f'we advance data{enumerate(elements)}')
-                            for index2, result2 in enumerate(elements):
-                                dt = result2.find_element('css selector', 'div dt')
-                                dd = result2.find_element('css selector', 'div dd')
-                                key_db = dt.text
-                                if key_db in industries_arr:
-                                    arr_key = 'Industry'
-                                elif key_db in types_arr:
-                                    arr_key = 'Type'
-                                elif key_db in founded_arr:
-                                    arr_key = 'Founded'
-                                elif key_db in headquarters_arr:
-                                    arr_key = 'Headquarters'
-                                elif key_db in website_arr:
-                                    arr_key = 'Website'
-                                elif key_db in specialties_arr:
-                                    arr_key = 'Specialties'
-                                elif key_db in companysize_arr:
-                                    arr_key = 'Companysize'
-                                else:
-                                    arr_key = key_db.replace(' ', '')
-                                # print(f"Link2w3 {index2 + 1}: {dt.text}====={dd.text}")
-                                if arr_key:
-                                    extra_data[arr_key] = dd.text
-                                # print(f'{dd.text}=={dt.text}')
-                            # exit()
-
-                            try:
-                                location = engine.find_element(by=By.XPATH,
-                                                                value=f'/html/body/main/section[1]/section/div/div[2]/div[1]/h3')
-                                extra_data['location'] = excerpt_string(location.get_attribute('innerText'))
-                                err = ''
-                            except NoSuchElementException:
-                                # Handle the case where the element does not exist
-                                err = "Element location: /html/body/main/section[1]/section/div/div[2]/div[1]/h3"
-                            website_txt = extra_data.get('Website', None)
-                            if website_txt is not None:
-                                extra_data['email_domain_verify'] = True
-                                try:
-                                    if verify_domain(extra_data['Website']):
-                                        extra_data['email_domain'] = verify_domain(extra_data['Website'])
-                                except Exception as e:
-                                    print(f"Error: {e}")
-
-                            extra_data['dt_reason'] = ''
-                            industry_txt = extra_data.get('Industry', None)
-
-                            if industry_txt is None:
-                                # //update not found on search engine
-                                extra_data['dt_reason'] = 'Not company details in linkedin'
-                                print(f"320The word 'company' is not present in the URL. {extra_data['dt_reason']}")
-                        else:
-                            # //update not found on google
-                            extra_data['dt_reason'] = f'Not match {highest_value}% in google'
-                            print(f"324The word 'company' is not present in the URL. {extra_data['dt_reason']}")
                     else:
-                        extra_data['dt_reason'] = 'Not found in google'
-                        print(f"333The word 'company' is not present in the URL. {extra_data['dt_reason']}")
-                    # print('done', extra_data)
-                    try:
-                        print('Adding data: ', extra_data)
-                        return extra_data['email_domain']
-                    except Exception as e:
-                        print(f"Error: {e}")
-                        return None
-                    # print('Adding data: ', extra_data, row['_id'])
-                    # mg_update(COLLECTION_COMPANY, {'_id': ObjectId(row['_id'])}, extra_data)
+                        extra_data['dt_reason'] = 'Not found in DuckDuckGo'
+                        print("⚠️ No valid results found on DuckDuckGo.")
+
+                    # try:
+                    #     print('Adding data: ', extra_data)
+                    #     return extra_data.get('email_domain')
+                    # except Exception as e:
+                    #     print(f"Error: {e}")
+                    #     return None
+                    print('Adding data: ', extra_data, row['_id'])
+                    mg_update(COLLECTION_COMPANY, {'_id': ObjectId(row['_id'])}, db, extra_data)
                     # print(industry_txt)
                     # exit()
                 except WebDriverException as e:
@@ -362,15 +374,17 @@ def process(data):
                     print("Error:", e)
                     print("The connection timed out. Check your internet connection or the target website.")
                     engine.quit()
-            
+
             except IndexError:
                 # show error
                 print('Index does NOT exist')
             finally:
-                engine.quit()
-    
-    print(f"Added: {data_add}, Exists: {data_exist}")
+                try:
+                    engine.quit()
+                except Exception:
+                    pass
 
+    print(f"Added: {data_add}, Exists: {data_exist}")
 
 
 def main():
@@ -393,7 +407,7 @@ def main():
                     process([detail_obj])
 
                     print("INFO : Completed the process for one company")
-                
+
                 else:
                     print("No messages in the queue.")
 
@@ -405,8 +419,10 @@ def main():
 
                 print("INFO : Checking the queue again after 5s...")
                 time.sleep(5)
-            
+
             except Exception as e:
+                print(str(e))
+                # swallow and continue polling
                 pass
 
     except KeyboardInterrupt:
@@ -418,10 +434,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
-
-    
-
-    
-
