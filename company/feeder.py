@@ -43,7 +43,7 @@ def main():
             
             print("Checking queue size...")
             queue_size = channel.queue_declare(queue=queue_name, passive=True).method.message_count
-            if queue_size < 2:
+            if queue_size < 20:
                 print("Fetching next batch of companys...")
                 
                 companys = get_company_to_verify(offset=offset, limit=limit)
