@@ -11,6 +11,8 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from lib.helpers import db
 
 from time import sleep
@@ -155,39 +157,74 @@ user_agents = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.71 Safari/537.36"
 ]
 
+# def create_driver(proxy=None):
+#     opt = webdriver.ChromeOptions()
+
+#     opt.add_experimental_option("debuggerAddress", "localhost:8989")
+#     opt.add_argument('--disable-blink-features=AutomationControlled')
+
+#     # Enhanced fingerprint protection
+#     opt.add_argument("--disable-webgl")  # WebGL fingerprint protection
+#     opt.add_argument("--disable-site-isolation-trials")
+#     opt.add_argument("--disable-features=IsolateOrigins,site-per-process")
+#     opt.add_argument("--disable-3d-apis")
+#     opt.add_argument("--disable-web-security")
+#     opt.add_argument("--disable-notifications")
+#     opt.add_argument(f"--user-data-dir={os.path.expanduser('~')}/chrome_profiles/profile_{random.randint(1,100)}")
+#     # Set realistic user agent
+#     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+#     opt.add_argument(f'--user-agent={user_agent}')
+
+#     driver = webdriver.Chrome(
+#         service=Service(ChromeDriverManager().install()),
+#         options=opt
+#     )
+
+#     driver.implicitly_wait(5)
+#     driver.execute_cdp_cmd(
+#         "Page.addScriptToEvaluateOnNewDocument", {
+#             "source": """
+#             Object.defineProperty(navigator, 'webdriver', {
+#                 get: () => undefined
+#             });
+#             """
+#         }
+#     )
+#     return driver
+
+CHROME_PATH = ChromeDriverManager().install()
+
 def create_driver(proxy=None):
     opt = webdriver.ChromeOptions()
 
-    opt.add_experimental_option("debuggerAddress", "localhost:8989")
-    opt.add_argument('--disable-blink-features=AutomationControlled')
+    # REMOVE this unless you manually launch Chrome with --remote-debugging-port=8989
+    # opt.add_experimental_option("debuggerAddress", "localhost:8989")
 
-    # Enhanced fingerprint protection
-    opt.add_argument("--disable-webgl")  # WebGL fingerprint protection
+    opt.add_argument('--disable-blink-features=AutomationControlled')
     opt.add_argument("--disable-site-isolation-trials")
     opt.add_argument("--disable-features=IsolateOrigins,site-per-process")
     opt.add_argument("--disable-3d-apis")
     opt.add_argument("--disable-web-security")
     opt.add_argument("--disable-notifications")
-    opt.add_argument(f"--user-data-dir={os.path.expanduser('~')}/chrome_profiles/profile_{random.randint(1,100)}")
-    # Set realistic user agent
+    # opt.add_argument("--headless=new")
+
+    # Use one stable profile (or headless)
+    opt.add_argument(f"--user-data-dir={os.path.expanduser('~')}/chrome_profiles/selenium_profile")
+    # opt.add_argument("--headless=new")  # uncomment if UI not needed
+    opt.add_argument("--disable-gpu")
+
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
     opt.add_argument(f'--user-agent={user_agent}')
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=opt
-    )
-
-    driver.implicitly_wait(5)
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument", {
-            "source": """
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            """
-        }
-    )
+    driver = webdriver.Chrome(service=Service(CHROME_PATH), options=opt)
+    driver.implicitly_wait(3)
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+    })
+    try:
+        driver.maximize_window()
+    except Exception:
+        pass
     return driver
 
 
@@ -251,17 +288,17 @@ def hostname_contains_company(host: str, company_name: str) -> int:
         return 0
 
 
-def process(data):
-    sleep_time_arr = [1, 2, 3, 4, 5, 6, 7]
+def process(data, engine):
+    # sleep_time_arr = [1, 2, 3, 4, 5, 6, 7]
+    sleep_time_arr = [0.5, 1, 1.5]
     data_add = 0
     data_exist = 0
     for index, row in enumerate(data):
         chk_company = {'status': False}
         if not chk_company['status']:
             print("here1")
-            engine = create_driver()
-            print('engine created')
-            engine.maximize_window()
+            # engine = create_driver()
+            # engine.maximize_window()
             company_name = row['name']
             try:
                 try:
@@ -278,7 +315,14 @@ def process(data):
                     )
                     print(f"🔍 Searching DuckDuckGo: {g_url}")
                     engine.get(g_url)
-                    sleep(5)
+                    # sleep(5)
+                    try:
+                        WebDriverWait(engine, 6).until(
+                            EC.presence_of_all_elements_located((By.CSS_SELECTOR, '.result__title a'))
+                        )
+                    except Exception:
+                        pass
+                    # search_results = engine.find_elements(By.CSS_SELECTOR, '.result__title a')
 
                     # Collect top results
                     # Selector for DDG HTML version results
@@ -365,71 +409,74 @@ def process(data):
                     # except Exception as e:
                     #     print(f"Error: {e}")
                     #     return None
-                    print('Adding data: ', extra_data, row['_id'])
-                    mg_update(COLLECTION_COMPANY, {'_id': ObjectId(row['_id'])}, db, extra_data)
+                    try:
+                        print('Adding data: ', extra_data, row['_id'])
+                        mg_update(COLLECTION_COMPANY, {'_id': ObjectId(row['_id'])}, db, extra_data)
+                    except Exception as e:
+                        print("Mongo update failed:", e)
+                        raise  # lets main() nack/requeue
+    
                     # print(industry_txt)
                     # exit()
+    
                 except WebDriverException as e:
                     # Handle the WebDriverException (connection timeout error)
                     print("Error:", e)
                     print("The connection timed out. Check your internet connection or the target website.")
-                    engine.quit()
+                    raise
 
             except IndexError:
                 # show error
                 print('Index does NOT exist')
-            finally:
-                try:
-                    engine.quit()
-                except Exception:
-                    pass
 
     print(f"Added: {data_add}, Exists: {data_exist}")
 
 
 def main():
+    engine = create_driver()
+    print('engine created')
+
+    parameters = pika.URLParameters(cloudamqp_url)
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    channel.queue_declare(queue=queue_name, durable=True)
+    channel.basic_qos(prefetch_count=1)
+
     try:
         while True:
-            try:
-                print("INFO: Polling to RMQ...")
-                parameters = pika.URLParameters(cloudamqp_url)
-                connection = pika.BlockingConnection(parameters)
-                channel = connection.channel()
+            print("INFO: Polling to RMQ...")
+            # IMPORTANT: auto_ack=False
+            method_frame, header_frame, body = channel.basic_get(queue=queue_name, auto_ack=False)
 
-                channel.queue_declare(queue=queue_name, durable=True)
-
-                method_frame, header_frame, body = channel.basic_get(queue=queue_name, auto_ack=True)
-
-                if method_frame:
-                    detail_obj = json.loads(body.decode('utf-8'))
-
-                    print("INFO : Picked data from queue...starting the process")
-                    process([detail_obj])
-
-                    print("INFO : Completed the process for one company")
-
-                else:
-                    print("No messages in the queue.")
-
+            if method_frame and body:
+                detail_obj = json.loads(body.decode('utf-8'))
+                print("INFO : Picked data from queue...starting the process")
                 try:
-                    connection.close()
-                    print("INFO : Polling Connection closed")
+                    process([detail_obj], engine)
+                    channel.basic_ack(method_frame.delivery_tag)   # ack only on success
+                    print("INFO : Completed the process for one company")
+                except WebDriverException:
+                    print("⚠️ Browser crashed, restarting driver…")
+                    try: engine.quit()
+                    except: pass
+                    engine = create_driver()
+                    channel.basic_nack(method_frame.delivery_tag, requeue=True)  # requeue the message
                 except Exception as e:
-                    pass
-
-                print("INFO : Checking the queue again after 5s...")
-                time.sleep(5)
-
-            except Exception as e:
-                print(str(e))
-                # swallow and continue polling
-                pass
+                    print("❌ Processing error:", e)
+                    channel.basic_nack(method_frame.delivery_tag, requeue=True)
+            else:
+                print("No messages in the queue.")
+                time.sleep(1)  # short backoff
 
     except KeyboardInterrupt:
-        try:
-            connection.close()
-        except Exception as e:
-            pass
+        pass
+    finally:
+        try: engine.quit()
+        except: pass
+        try: channel.close()
+        except: pass
+        try: connection.close()
+        except: pass
 
 
 if __name__ == "__main__":
