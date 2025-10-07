@@ -286,6 +286,96 @@ def claim_one_user():
     )
     return doc
 
+def _base_user_filter(now: datetime):
+    return {
+        # needs work
+        "business_email": {"$in": ["", None, False]},
+        "allChecked": {"$ne": True},
+
+        # not currently leased or lease expired
+        "$or": [
+            {"lock": {"$exists": False}},
+            {"lock.lease_until": {"$lt": now}}
+        ],
+
+        # cap attempts
+        "$expr": {
+            "$lt": [
+                {"$ifNull": ["$lock.attempts", 0]},
+                MAX_ATTEMPTS_PER_USER
+            ]
+        },
+    }
+
+def _find_users_with_verified_company(limit:int=50):
+    """
+    Returns a small batch of user _ids whose company already has a verified pattern.
+    We check either verified_pattern_index or a non-empty verified_patterns array.
+    We also require company domain to exist (email_domain or domain).
+    """
+    pipeline = [
+        {"$match": _base_user_filter(now_utc())},
+
+        # join company
+        {"$lookup": {
+            "from": company.name,            # PyMongo collection name
+            "localField": "refCompanyId",
+            "foreignField": "_id",
+            "as": "comp"
+        }},
+        {"$unwind": "$comp"},
+
+        # compute a {domain} from email_domain || domain
+        {"$addFields": {
+            "comp_domain": {
+                "$ifNull": ["$comp.email_domain", "$comp.domain"]
+            }
+        }},
+
+        # company must have pattern and a usable domain
+        {"$match": {
+            "comp_domain": {"$type": "string", "$ne": ""},
+            "$or": [
+                {"comp.verified_pattern_index": {"$type": "number"}},
+                {"comp.verified_patterns.0": {"$exists": True}}
+            ]
+        }},
+
+        {"$sort": {"createdAt": 1}},
+        {"$limit": limit},
+        {"$project": {"_id": 1}}
+    ]
+
+    return list(users.aggregate(pipeline, allowDiskUse=False))
+
+def claim_one_user_verified_company() -> dict | None:
+    lease_until = now_utc() + timedelta(seconds=LEASE_SECS)
+
+    # fetch a small candidate pool first (read-only)
+    candidates = _find_users_with_verified_company(limit=50)
+    if not candidates:
+        return None
+
+    ids = [c["_id"] for c in candidates]
+
+    # atomically claim one from that pool
+    doc = users.find_one_and_update(
+        {
+            "_id": {"$in": ids},
+            **_base_user_filter(now_utc())
+        },
+        {
+            "$set": {
+                "lock.owner": WORKER_ID,
+                "lock.lease_until": lease_until
+            },
+            "$inc": {"lock.attempts": 1}
+        },
+        sort=[("createdAt", 1)],
+        return_document=ReturnDocument.AFTER
+    )
+    return doc
+
 def renew_lease(user_id: ObjectId):
     users.update_one(
         {"_id": user_id, "lock.owner": WORKER_ID},
@@ -470,9 +560,11 @@ async def main_loop():
         log.info(f"Worker {WORKER_ID} started with lease={LEASE_SECS}s renew={RENEW_EVERY_SECS}s")
         while True:
             # Atomically claim one user
-            user = claim_one_user()
+            # user = claim_one_user()
+            user = claim_one_user_verified_company()
             if not user:
                 time.sleep(BATCH_IDLE_SLEEP_S)
+                print("no user found")
                 continue
 
             uid = user["_id"]
