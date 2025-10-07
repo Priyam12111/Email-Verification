@@ -318,41 +318,49 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
         # )
         return
 
-    # If company already has a verified pattern, short-circuit
-    if comp and "verified_pattern_index" in comp:
-        idx = comp.get("verified_pattern_index", 0)
-        try:
-            email = (
-                PATTERNS[idx]
-                .format(
-                    first=firstName,
-                    last=lastName,
-                    domain=domain,
-                    first_initial=firstName[0] if firstName else '',
-                    last_initial=lastName[0] if lastName else ''
-                )
-                .lower()
-                .replace('"', '')
-                .replace("(", "")
-                .replace(")", "")
-            )
-        except Exception as e:
-            log.info(f"Failed to format fast-path email for user {user_id}: {e}")
-            email = None
+    if comp:
+        idx = comp.get("verified_pattern_index")
+        if idx is None:
+            vps = comp.get("verified_patterns")
+            if isinstance(vps, list) and vps:
+                try:
+                    idx = PATTERNS.index(vps[0])
+                except ValueError:
+                    idx = None
 
-        if email:
-            users.update_one(
-                {"_id": user_id},
-                {"$set": {
-                    "business_email": email,
-                    "modifiedAt_pattern": iso_now_str(),
-                    "email_pattern_source": "company_verified",
-                    "email_verified": True,  # optional
-                    "v6_checked": iso_now_str(),
-                    "v6": idx
-                }}
-            )
-        return
+        if idx is not None:
+            try:
+                email = (
+                    PATTERNS[idx]
+                    .format(
+                        first=firstName,
+                        last=lastName,
+                        domain=domain,
+                        first_initial=firstName[0] if firstName else '',
+                        last_initial=lastName[0] if lastName else ''
+                    )
+                    .lower()
+                    .replace('"', '')
+                    .replace("(", "")
+                    .replace(")", "")
+                )
+            except Exception as e:
+                log.info(f"Failed to format fast-path email for user {user_id}: {e}")
+                email = None
+
+            if email:
+                users.update_one(
+                    {"_id": user_id},
+                    {"$set": {
+                        "business_email": email,
+                        "modifiedAt_pattern": iso_now_str(),
+                        "email_pattern_source": "company_verified",
+                        "email_verified": True,
+                        "v6_checked": iso_now_str(),
+                        "v6": idx
+                    }}
+                )
+            return
 
     current_index = user.get("v6", 0)
     last_renew = time.monotonic()
