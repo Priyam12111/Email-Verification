@@ -257,7 +257,8 @@ def claim_one_user():
         {
             # needs work
             "business_email": {"$in": ["", None, False]},
-            "allChecked": {"$exists": False},
+            # "allChecked": {"$exists": False},
+            "allChecked": {"$ne": True},
 
             # not currently leased or lease expired
             "$or": [
@@ -309,13 +310,12 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
     company_id = user.get("refCompanyId")
 
     comp = company.find_one({"_id": company_id}) if company_id else None
-    domain = comp.get("email_domain") if comp else None
+    domain = comp.get("email_domain") or comp.get("domain") if comp else None
     if not domain:
-        # nothing sensible to do; mark checked and exit
-        users.update_one(
-            {"_id": user_id},
-            {"$set": {"allChecked": True, "v6_checked": iso_now_str()}}
-        )
+        # users.update_one(
+        #     {"_id": user_id},
+        #     {"$set": {"allChecked": True, "v6_checked": iso_now_str()}}
+        # )
         return
 
     # If company already has a verified pattern, short-circuit
