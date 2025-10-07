@@ -2,8 +2,9 @@ import pika
 import time
 import json
 import re
-from bson import ObjectId
 from lib.helpers import get_company_to_verify
+from bson import ObjectId, Decimal128
+from datetime import datetime, date
 
 # RabbitMQ connection parameters
 # cloudamqp_url = 'amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg'
@@ -12,9 +13,16 @@ queue_name = "company_details"
 
 class CustomEncoder(json.JSONEncoder):
     def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
         if isinstance(obj, ObjectId):
             return str(obj)
+        if isinstance(obj, Decimal128):
+            return float(obj.to_decimal())
+        if isinstance(obj, bytes):
+            return obj.decode('utf-8', errors='ignore')
         return super().default(obj)
+
 
 
 def main():
