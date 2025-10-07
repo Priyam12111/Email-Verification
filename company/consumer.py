@@ -340,44 +340,54 @@ def process(data, engine):
                         if is_directory_or_social(link):
                             continue
 
-                        # Similarity on title
-                        sim_score = match_string_percentage(company_name, title)
-
-                        # Heuristics: prefer root/homepage-like URLs and hostnames containing company tokens
+                        # Normalize URL - keep only root for fair comparison
                         try:
-                            host = urlsplit(link).netloc or ''
-                        except:
+                            parsed = urlsplit(link)
+                            host = parsed.netloc or ''
+                            root_url = f"{parsed.scheme}://{host}/".rstrip('/')
+                        except Exception:
+                            root_url = link
                             host = ''
 
+                        # Similarity on title and company name
+                        sim_score = match_string_percentage(company_name, title)
+
+                        # Heuristics: prefer clean root/homepage URLs, or where hostname contains company tokens
                         bonus = prefer_root_like(link) + hostname_contains_company(host, company_name)
 
-                        # Final score out of ~132 (100 + ~20 + ~12); we'll compare on this
+                        # Add small extra weight if path seems like a homepage
+                        if parsed.path in ('', '/', '/home', '/index.html'):
+                            bonus += 5
+
                         final_score = sim_score + bonus
 
-                        values[link] = final_score
-                        scored_meta[link] = {
-                            "title": title,
-                            "sim_score": sim_score,
-                            "bonus": bonus
-                        }
+                        # Accumulate max score per root domain (so subpages don’t override homepage)
+                        if root_url not in values or final_score > values[root_url]:
+                            values[root_url] = final_score
+                            scored_meta[root_url] = {
+                                "title": title,
+                                "sim_score": sim_score,
+                                "bonus": bonus,
+                                "raw_link": link
+                            }
 
                     extra_data = {'status': True, 'dt_status': True, 'modifiedAt': str(formatted_time())}
 
                     if len(values):
-                        # Pick best URL
+                        # Pick best-scoring root URL
                         best_url = max(values, key=values.get)
                         best_score = values[best_url]
                         meta = scored_meta.get(best_url, {})
+
                         print(
                             f"🏆 Best match: {best_url} | final={best_score} "
                             f"(title_sim={meta.get('sim_score')} bonus={meta.get('bonus')})"
                         )
 
-                        # Normalize URL (remove tracking/query)
-                        best_url_clean = url_remove_query(best_url)
+                        # Use the original link for domain verification
+                        best_url_clean = url_remove_query(meta.get('raw_link', best_url))
                         extra_data['publicUrl'] = best_url_clean
 
-                        # Verify/derive domain
                         try:
                             dom = verify_domain(best_url_clean)
                             if dom:
@@ -391,7 +401,7 @@ def process(data, engine):
                             extra_data['dt_reason'] = f'Verify domain error: {e}'
                             print(f"Error verifying domain: {e}")
 
-                        # Optional: click-through small move to reduce bot-detection
+                        # Optional: light mouse movement to appear human
                         try:
                             actions = ActionChains(engine)
                             actions.move_by_offset(20, 200).click().perform()
