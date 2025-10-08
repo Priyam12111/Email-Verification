@@ -171,17 +171,25 @@ def get_company_to_verify(offset, limit=10):
         cond = [
             {
                 "$match": {
-                    "$or": [
-                        {"domain": {"$exists": False}},
-                        {"domain": None},
-                        {"domain": ""},
-                        {"email_domain": {"$exists": False}},
-                        {"email_domain": None},
-                        {"email_domain": ""}
+                    "$and": [
+                        {
+                            "$or": [
+                                {"domain": {"$exists": False}},
+                                {"domain": None},
+                                {"domain": ""}
+                            ]
+                        },
+                        {
+                            "$or": [
+                                {"email_domain": {"$exists": False}},
+                                {"email_domain": None},
+                                {"email_domain": ""}
+                            ]
+                        }
                     ]
                 }
             },
-            {"$sort": {"createdAt": 1}},
+            {"$sort": {"updatedAt": 1}},
             {"$skip": offset},
             {"$limit": limit}
         ]
