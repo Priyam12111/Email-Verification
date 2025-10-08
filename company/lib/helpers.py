@@ -170,18 +170,22 @@ def get_company_to_verify(offset, limit=10):
     try:
         cond = [
             {
-                '$match': {
-                    'status': False,
-                    # 'company_system': system_no
+                "$match": {
+                    "$or": [
+                        {"domain": {"$exists": False}},
+                        {"domain": None},
+                        {"domain": ""},
+                        {"email_domain": {"$exists": False}},
+                        {"email_domain": None},
+                        {"email_domain": ""}
+                    ]
                 }
             },
-            {
-                '$skip': offset
-            },
-            {
-                '$limit': limit
-            }
+            {"$sort": {"createdAt": 1}},
+            {"$skip": offset},
+            {"$limit": limit}
         ]
+
 
         data = mg_aggregate(COLLECTION_COMPANY, cond, db)
 
