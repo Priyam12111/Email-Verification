@@ -401,8 +401,8 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
 
     comp = company.find_one({"_id": company_id}) if company_id else None
     domain = comp.get("email_domain") or comp.get("domain") if comp else None
-    name = comp.get("name")
-    if not domain or not name:
+    # name = comp.get("name")
+    if not domain:
         users.update_one(
             {"_id": user_id},
             {"$set": {
@@ -412,7 +412,7 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
                 # "v6": len(PATTERNS)
             }}
         )
-        log.info(f"[SKIP] user={user_id} company={company_id} reason=missing Domain:{domain} Name:{name}")
+        log.info(f"[SKIP] user={user_id} company={company_id} reason=missing Domain:{domain}")
         return        
 
     if comp:
