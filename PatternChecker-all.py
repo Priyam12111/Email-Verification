@@ -388,14 +388,22 @@ def release_lock(user_id: ObjectId):
         {"$unset": {"lock": ""}}
     )
 
+def clean_name(value: str) -> str:
+    if not value:
+        return ""
+    # Remove emojis, digits, punctuation, and non-letter characters
+    value = re.sub(r"[^\x00-\x7F]+", "", value)   # remove emojis / non-ASCII
+    value = re.sub(r"[^A-Za-z]", "", value)       # keep only letters (no spaces)
+    return value.strip().title()
+
 async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains: set[str]):
     """
     Uses your existing provider-based browser validation.
     Renews lease periodically so long-running checks don't lose their claim.
     """
     fullName = user.get("fullName", "").split()
-    firstName = fullName[0] if len(fullName) > 0 else ""
-    lastName  = fullName[-1] if len(fullName) > 1 else ""
+    firstName = clean_name(user.get("firstName", ""))
+    lastName  = clean_name(user.get("lastName", ""))
     user_id   = ObjectId(user["_id"])
     company_id = user.get("refCompanyId")
 
