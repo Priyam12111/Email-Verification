@@ -19,6 +19,26 @@ from utils.helpers import now_ist, inc_stats
 
 browser_manager = BrowserManager()
 
+TOTAL_PATTERNS = [
+    "{first}.{last}@{domain}",
+    "{first_initial}{last}@{domain}",
+    "{first}@{domain}",
+    "{first}.{last_initial}@{domain}",
+    "{last}.{first}@{domain}",
+    "{last_initial}.{first}@{domain}",
+    "{first_initial}.{last}@{domain}",
+    "{last_initial}{first_initial}@{domain}",
+    "{last}@{domain}",
+    "{first}{last_initial}@{domain}",
+    "{first}{last}@{domain}",
+    "{first}_{last}@{domain}",
+    "{first}-{last}@{domain}",
+    "{last}{first_initial}@{domain}",
+    "{first_initial}{last_initial}@{domain}",
+    "{last_initial}{first}@{domain}",
+    "{last}{first}@{domain}",
+]
+
 PATTERNS = [
     "{first}.{last}@{domain}",
     "{first_initial}{last}@{domain}",
@@ -388,22 +408,14 @@ def release_lock(user_id: ObjectId):
         {"$unset": {"lock": ""}}
     )
 
-def clean_name(value: str) -> str:
-    if not value:
-        return ""
-    # Remove emojis, digits, punctuation, and non-letter characters
-    value = re.sub(r"[^\x00-\x7F]+", "", value)   # remove emojis / non-ASCII
-    value = re.sub(r"[^A-Za-z]", "", value)       # keep only letters (no spaces)
-    return value.strip().title()
-
 async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains: set[str]):
     """
     Uses your existing provider-based browser validation.
     Renews lease periodically so long-running checks don't lose their claim.
     """
     fullName = user.get("fullName", "").split()
-    firstName = clean_name(user.get("firstName", ""))
-    lastName  = clean_name(user.get("lastName", ""))
+    firstName = fullName[0] if len(fullName) > 0 else ""
+    lastName  = fullName[-1] if len(fullName) > 1 else ""
     user_id   = ObjectId(user["_id"])
     company_id = user.get("refCompanyId")
 
@@ -429,14 +441,14 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
             vps = comp.get("verified_patterns")
             if isinstance(vps, list) and vps:
                 try:
-                    idx = PATTERNS.index(vps[0])
+                    idx = TOTAL_PATTERNS.index(vps[0])
                 except ValueError:
                     idx = None
 
         if idx is not None:
             try:
                 email = (
-                    PATTERNS[idx]
+                    TOTAL_PATTERNS[idx]
                     .format(
                         first=firstName,
                         last=lastName,
@@ -485,7 +497,7 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
 
         try:
             email = (
-                PATTERNS[idx]
+                TOTAL_PATTERNS[idx]
                 .format(
                     first=firstName,
                     last=lastName,
@@ -542,7 +554,7 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
                     {"_id": company_id},
                     {"$set": {
                         "verified_pattern_index": idx,
-                        "verified_patterns": [PATTERNS[idx]],
+                        "verified_patterns": [TOTAL_PATTERNS[idx]],
                         "verifiedAt": iso_now_str(),
                         "provider_assumed": used_provider
                     }}
