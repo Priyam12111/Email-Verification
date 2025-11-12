@@ -414,8 +414,8 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
     Renews lease periodically so long-running checks don't lose their claim.
     """
     fullName = user.get("fullName", "").split()
-    firstName = fullName[0] if len(fullName) > 0 else ""
-    lastName  = fullName[-1] if len(fullName) > 1 else ""
+    firstName = (user.get("firstName") or "").strip()
+    lastName  = (user.get("lastName") or "").strip()
     user_id   = ObjectId(user["_id"])
     company_id = user.get("refCompanyId")
 
