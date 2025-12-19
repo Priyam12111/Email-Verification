@@ -98,6 +98,7 @@ def wrreplace(cpth, search_text, replace_text):
         f.seek(0)
         f.write(file)
         f.truncate()
+    print(f"Replaced in {cpth}: {search_text} -> {replace_text}")
 
 
 def write(cont):

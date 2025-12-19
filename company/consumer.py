@@ -461,50 +461,50 @@ def process(data, start=0):
     print(f"Added: {data_add}, Exists: {data_exist}")
 
 
-def main():
-    try:
-        while True:
-            try:
-                print("INFO: Polling to RMQ...")
-                parameters = pika.URLParameters(cloudamqp_url)
-                connection = pika.BlockingConnection(parameters)
-                channel = connection.channel()
+# def main():
+#     try:
+#         while True:
+#             try:
+#                 print("INFO: Polling to RMQ...")
+#                 parameters = pika.URLParameters(cloudamqp_url)
+#                 connection = pika.BlockingConnection(parameters)
+#                 channel = connection.channel()
 
-                channel.queue_declare(queue=queue_name, durable=True)
+#                 channel.queue_declare(queue=queue_name, durable=True)
 
-                method_frame, header_frame, body = channel.basic_get(
-                    queue=queue_name, auto_ack=True
-                )
+#                 method_frame, header_frame, body = channel.basic_get(
+#                     queue=queue_name, auto_ack=True
+#                 )
 
-                if method_frame:
-                    detail_obj = json.loads(body.decode("utf-8"))
+#                 if method_frame:
+#                     detail_obj = json.loads(body.decode("utf-8"))
 
-                    print("INFO : Picked data from queue...starting the process")
-                    process([detail_obj])
+#                     print("INFO : Picked data from queue...starting the process")
+#                     process([detail_obj])
 
-                    print("INFO : Completed the process for one company")
+#                     print("INFO : Completed the process for one company")
 
-                else:
-                    print("No messages in the queue.")
+#                 else:
+#                     print("No messages in the queue.")
 
-                try:
-                    connection.close()
-                    print("INFO : Polling Connection closed")
-                except Exception as e:
-                    pass
+#                 try:
+#                     connection.close()
+#                     print("INFO : Polling Connection closed")
+#                 except Exception as e:
+#                     pass
 
-                print("INFO : Checking the queue again after 5s...")
-                time.sleep(5)
+#                 print("INFO : Checking the queue again after 5s...")
+#                 time.sleep(5)
 
-            except Exception as e:
-                pass
+#             except Exception as e:
+#                 pass
 
-    except KeyboardInterrupt:
-        try:
-            connection.close()
-        except Exception as e:
-            pass
+#     except KeyboardInterrupt:
+#         try:
+#             connection.close()
+#         except Exception as e:
+#             pass
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
