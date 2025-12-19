@@ -123,4 +123,4 @@ def main(start=0, grind=False) -> None:
 
 if __name__ == "__main__":
     # print(get_li_page("https://www.linkedin.com/company/coursera/"))
-    main(266, grind=True)
+    main(73, grind=True)
