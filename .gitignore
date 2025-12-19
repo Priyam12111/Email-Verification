@@ -7,3 +7,4 @@ test.py
 /build
 fetch_domain.spec
 /xVenv
+/.venv
