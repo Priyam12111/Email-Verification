@@ -2,7 +2,15 @@ import csv
 
 from bson import ObjectId
 
-from lib.u_date import formatted_time, encoded_string, source_lang, remove_keyword, extract_url, get_mac_address
+from lib.u_date import (
+    formatted_time,
+    encoded_string,
+    source_lang,
+    remove_keyword,
+    extract_url,
+    get_mac_address,
+)
+from all_imports import *
 
 from selenium import webdriver
 from webdriver_manager.chrome import ChromeDriverManager
@@ -26,19 +34,20 @@ import random
 from urllib.parse import urlsplit, urlunparse, urlparse
 
 from lib.constants import COLLECTION_COMPANY, COLLECTION_SYSTEM
+
 # from lib.mongo_connection import mg_list, mg_one, mg_update, mg_aggregate
 # from lib.helpers import get_company_to_verify
 
 filename = formatted_time("%Y%m%d%H%M%S")
 
-cloudamqp_url = 'amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg'
+cloudamqp_url = "amqps://ehwegmmg:ueyUmQ9kgBB8B5UkWjFaPZBW2xsqleBt@puffin.rmq2.cloudamqp.com/ehwegmmg"
 queue_name = "company_details"
 
 
 def Write(filenam, cont):  # Updating the vars and Slots
-    with open(f'{filenam}.csv', 'a', encoding='utf-8') as f:
+    with open(f"{filenam}.csv", "a", encoding="utf-8") as f:
         try:
-            f.write(f'{cont}')
+            f.write(f"{cont}")
         except:
             pass
         f.close()
@@ -60,15 +69,30 @@ def verify_domain2(url):
         url = "https://" + url
     parsed_url = urlsplit(url)
     domain_url = parsed_url.netloc.lower()
-    if domain_url.startswith('www.'):
+    if domain_url.startswith("www."):
         domain_url = domain_url[4:]
 
-    domain_postfix = ['gov.au', 'com.au', 'org.au', 'net.au', 'asn.au', 'com.py', 'com.sg', 'gov.in',
-                      'com.sg', 'edu.au', 'co.uk', 'co.in']
-    d_br = domain_url.split('.')
-    if len(domain_url.split('.')) == 3 and (d_br[len(d_br) - 2] + "." + d_br[len(d_br) - 1]) in domain_postfix:
+    domain_postfix = [
+        "gov.au",
+        "com.au",
+        "org.au",
+        "net.au",
+        "asn.au",
+        "com.py",
+        "com.sg",
+        "gov.in",
+        "com.sg",
+        "edu.au",
+        "co.uk",
+        "co.in",
+    ]
+    d_br = domain_url.split(".")
+    if (
+        len(domain_url.split(".")) == 3
+        and (d_br[len(d_br) - 2] + "." + d_br[len(d_br) - 1]) in domain_postfix
+    ):
         domain_url = domain_url
-    elif len(domain_url.split('.')) >= 3:
+    elif len(domain_url.split(".")) >= 3:
         domain_url = False
     # return domain_url.strip()
     if isinstance(domain_url, str):
@@ -88,38 +112,38 @@ def verify_domain(url):
     domain_url = parsed_url.netloc.lower()
 
     # Remove 'www.' if present
-    if domain_url.startswith('www.'):
+    if domain_url.startswith("www."):
         domain_url = domain_url[4:]
 
     # Split the domain into parts and return the domain including subdomains
-    domain_parts = domain_url.split('.')
-    
+    domain_parts = domain_url.split(".")
+
     if len(domain_parts) >= 2:
         # Return the domain and subdomains
-        return '.'.join(domain_parts)
+        return ".".join(domain_parts)
     else:
         # If the domain is invalid
         return None
-    
+
 
 def sub_domain(url):
     pattern = r"https?://([^/.]+)\."
     match = re.search(pattern, url)
-    my_list = ['www', 'linkedin']
+    my_list = ["www", "linkedin"]
     if match:
         subdomain = match.group(1)
         if subdomain in my_list:
             return url
         else:
-            return url.replace(subdomain, 'in')
+            return url.replace(subdomain, "in")
     else:
         return url
 
 
 def excerpt_string(text):
-    parts = text.split('  ', 2)
+    parts = text.split("  ", 2)
     if len(parts) >= 2:
-        excerpt_str = text.replace(parts[len(parts) - 1], '')
+        excerpt_str = text.replace(parts[len(parts) - 1], "")
     else:
         excerpt_str = text
     return excerpt_str.strip()
@@ -154,15 +178,16 @@ user_agents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:92.0) Gecko/20100101 Firefox/92.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:91.0) Gecko/20100101 Firefox/91.0",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.54 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.71 Safari/537.36"
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.71 Safari/537.36",
 ]
+
 
 def create_driver(proxy=None):
     opt = webdriver.ChromeOptions()
 
     opt.add_experimental_option("debuggerAddress", "localhost:8989")
-    opt.add_argument('--disable-blink-features=AutomationControlled')
-    
+    opt.add_argument("--disable-blink-features=AutomationControlled")
+
     # Enhanced fingerprint protection
     opt.add_argument("--disable-webgl")  # WebGL fingerprint protection
     opt.add_argument("--disable-site-isolation-trials")
@@ -170,10 +195,12 @@ def create_driver(proxy=None):
     opt.add_argument("--disable-3d-apis")
     opt.add_argument("--disable-web-security")
     opt.add_argument("--disable-notifications")
-    opt.add_argument(f"--user-data-dir={os.path.expanduser('~')}/chrome_profiles/profile_{random.randint(1,100)}")
+    opt.add_argument(
+        f"--user-data-dir={os.path.expanduser('~')}/chrome_profiles/profile_{random.randint(1,100)}"
+    )
     # Set realistic user agent
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
-    opt.add_argument(f'--user-agent={user_agent}')
+    opt.add_argument(f"--user-agent={user_agent}")
 
     # Disable automation flags
     # opt.add_experimental_option("excludeSwitches", ["enable-automation", "load-extension"])
@@ -186,81 +213,110 @@ def create_driver(proxy=None):
     # opt.add_argument('--headless=new')  # New headless mode in Chrome 109+
     # opt.add_argument('--window-size=1920,1080')  # Set resolution when headless
     driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()), 
-        options=opt
+        service=Service(ChromeDriverManager().install()), options=opt
     )
 
     driver.implicitly_wait(5)
     driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument", {
+        "Page.addScriptToEvaluateOnNewDocument",
+        {
             "source": """
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
             """
-        }
+        },
     )
     return driver
 
 
-
-def process(data):
+def process(data, start=0):
     sleep_time_arr = [1, 2, 3, 4, 5, 6, 7]
     data_add = 0
     data_exist = 0
     for index, row in enumerate(data):
+        if index < start:
+            continue
         chk_company = {
-            'status': False,}
-        if not chk_company['status']:
-            engine = create_driver()
+            "status": False,
+        }
+        if not chk_company["status"]:
+            engine = setup_driver(debug=False)
             engine.maximize_window()
-            company_name = row['name']
+            company_name = (
+                row.replace("ltd.", "")
+                .replace("LLC.", "")
+                .replace("inc.", "")
+                .replace("llc.", "")
+                .replace("corp.", "")
+                .replace("co.", "")
+            )
             try:
                 try:
-                    com_name = encoded_string(company_name.replace(' | ', ' '))
+                    com_name = encoded_string(company_name.replace(" | ", " "))
                     random_sleep_time = random.choice(sleep_time_arr)
                     sleep(random_sleep_time)
-                    g_url = f'https://html.duckduckgo.com/html?q=%27{com_name}%27+linkedin.com%2Fcompany'
+                    g_url = f"https://html.duckduckgo.com/html?q=%27{com_name}%27+linkedin.com%2Fcompany"
                     engine.get(g_url)
                     sleep(5)
-                    
+
                     # Extract and print top 10 links
-                    search_results = engine.find_elements('css selector', '.result__title')
+                    search_results = engine.find_elements(
+                        "css selector", ".result__title"
+                    )
                     values = {}
                     # Check if "company/school" is present in the lowercase URL
-                    check_keywords = [
-                        "linkedin.com/company",
-                        "linkedin.com/school"
-                    ]
+                    check_keywords = ["linkedin.com/company", "linkedin.com/school"]
                     for s_index, result in enumerate(search_results[:20]):
-                        link = extract_url(result.find_element('css selector', 'a').get_attribute('href'))
-                        h3 = result.find_element('css selector', 'a').get_attribute('innerText')
+                        link = extract_url(
+                            result.find_element("css selector", "a").get_attribute(
+                                "href"
+                            )
+                        )
+                        h3 = result.find_element("css selector", "a").get_attribute(
+                            "innerText"
+                        )
 
                         # print(h3, link)
                         pattern = re.compile("|".join(check_keywords))
                         match_keyword = pattern.search(link.lower())
                         if match_keyword:
-                            values[link] = match_string_percentage(company_name, remove_keyword(h3))
+                            values[link] = match_string_percentage(
+                                company_name, remove_keyword(h3)
+                            )
 
                     sleep(1)
-                    extra_data = {'status': True, 'dt_status': True, 'modifiedAt': str(formatted_time())}
+                    extra_data = {
+                        "status": True,
+                        "dt_status": True,
+                        "modifiedAt": str(formatted_time()),
+                    }
                     if len(values):
                         # Find the highest value and its key
                         link = max(values, key=values.get)
                         highest_value = values[link]
-                        print("Highest value:", str(formatted_time()), highest_value, link)
+                        wrreplace(
+                            "company\\formatter.csv",
+                            row,
+                            f"{row},{link}",
+                        )
+                        print(
+                            "Highest value:", str(formatted_time()), highest_value, link
+                        )
 
                         if highest_value > 93:
                             # add data
                             link = url_remove_query(link)
-                            replace_txt = main_domain(link).replace('.', '-')
-                            final_domain = link.replace(main_domain(link), f'{replace_txt}.translate.goog')
-                            if 'linkedin.com/school' in link:
+                            replace_txt = main_domain(link).replace(".", "-")
+                            final_domain = link.replace(
+                                main_domain(link), f"{replace_txt}.translate.goog"
+                            )
+                            if "linkedin.com/school" in link:
                                 translate_url = link
                             else:
-                                translate_url = f'{final_domain}?_x_tr_sl={source_lang(link)}&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=sc'
+                                translate_url = f"{final_domain}?_x_tr_sl={source_lang(link)}&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=sc"
 
-                            print(f'urls 1: {final_domain} == {translate_url} = {link}')
+                            print(f"urls 1: {final_domain} == {translate_url} = {link}")
 
                             engine.get(translate_url)
                             sleep(5)
@@ -271,41 +327,60 @@ def process(data):
 
                             sleep(2)
                             engine.implicitly_wait(2)
-                            extra_data['publicUrl'] = link
+                            extra_data["publicUrl"] = link
                             # search_results2 = engine.find_elements('css selector', '.tF2Cxc')
-                            elements = engine.find_elements('css selector',
-                                                            '.mb-2.flex.papabear\\:mr-3.mamabear\\:mr-3.babybear\\:flex-wrap')
+                            elements = engine.find_elements(
+                                "css selector",
+                                ".mb-2.flex.papabear\\:mr-3.mamabear\\:mr-3.babybear\\:flex-wrap",
+                            )
                             sleep(2)
-                            industries_arr = ['Sector', 'Professional field', 'industry']
-                            types_arr = ['Guy', 'type', 'Art', 'category']
-                            founded_arr = ['Founding date', 'Established', 'establish', 'Foundedwhen', 'Foundation',
-                                            'Foundedin']
-                            specialties_arr = ['Specializations', 'Sectors of expertise', 'bailiwick', 'field', 'Areas',
-                                                'Specialization', 'Specialty']
-                            headquarters_arr = ['Head office', 'Site', 'Thirst']
-                            website_arr = ['website']
-                            companysize_arr = ['scale', 'Sizeofthecompany']
+                            industries_arr = [
+                                "Sector",
+                                "Professional field",
+                                "industry",
+                            ]
+                            types_arr = ["Guy", "type", "Art", "category"]
+                            founded_arr = [
+                                "Founding date",
+                                "Established",
+                                "establish",
+                                "Foundedwhen",
+                                "Foundation",
+                                "Foundedin",
+                            ]
+                            specialties_arr = [
+                                "Specializations",
+                                "Sectors of expertise",
+                                "bailiwick",
+                                "field",
+                                "Areas",
+                                "Specialization",
+                                "Specialty",
+                            ]
+                            headquarters_arr = ["Head office", "Site", "Thirst"]
+                            website_arr = ["website"]
+                            companysize_arr = ["scale", "Sizeofthecompany"]
                             # print(f'we advance data{enumerate(elements)}')
                             for index2, result2 in enumerate(elements):
-                                dt = result2.find_element('css selector', 'div dt')
-                                dd = result2.find_element('css selector', 'div dd')
+                                dt = result2.find_element("css selector", "div dt")
+                                dd = result2.find_element("css selector", "div dd")
                                 key_db = dt.text
                                 if key_db in industries_arr:
-                                    arr_key = 'Industry'
+                                    arr_key = "Industry"
                                 elif key_db in types_arr:
-                                    arr_key = 'Type'
+                                    arr_key = "Type"
                                 elif key_db in founded_arr:
-                                    arr_key = 'Founded'
+                                    arr_key = "Founded"
                                 elif key_db in headquarters_arr:
-                                    arr_key = 'Headquarters'
+                                    arr_key = "Headquarters"
                                 elif key_db in website_arr:
-                                    arr_key = 'Website'
+                                    arr_key = "Website"
                                 elif key_db in specialties_arr:
-                                    arr_key = 'Specialties'
+                                    arr_key = "Specialties"
                                 elif key_db in companysize_arr:
-                                    arr_key = 'Companysize'
+                                    arr_key = "Companysize"
                                 else:
-                                    arr_key = key_db.replace(' ', '')
+                                    arr_key = key_db.replace(" ", "")
                                 # print(f"Link2w3 {index2 + 1}: {dt.text}====={dd.text}")
                                 if arr_key:
                                     extra_data[arr_key] = dd.text
@@ -313,40 +388,55 @@ def process(data):
                             # exit()
 
                             try:
-                                location = engine.find_element(by=By.XPATH,
-                                                                value=f'/html/body/main/section[1]/section/div/div[2]/div[1]/h3')
-                                extra_data['location'] = excerpt_string(location.get_attribute('innerText'))
-                                err = ''
+                                location = engine.find_element(
+                                    by=By.XPATH,
+                                    value=f"/html/body/main/section[1]/section/div/div[2]/div[1]/h3",
+                                )
+                                extra_data["location"] = excerpt_string(
+                                    location.get_attribute("innerText")
+                                )
+                                err = ""
                             except NoSuchElementException:
                                 # Handle the case where the element does not exist
                                 err = "Element location: /html/body/main/section[1]/section/div/div[2]/div[1]/h3"
-                            website_txt = extra_data.get('Website', None)
+                            website_txt = extra_data.get("Website", None)
                             if website_txt is not None:
-                                extra_data['email_domain_verify'] = True
+                                extra_data["email_domain_verify"] = True
                                 try:
-                                    if verify_domain(extra_data['Website']):
-                                        extra_data['email_domain'] = verify_domain(extra_data['Website'])
+                                    if verify_domain(extra_data["Website"]):
+                                        extra_data["email_domain"] = verify_domain(
+                                            extra_data["Website"]
+                                        )
                                 except Exception as e:
                                     print(f"Error: {e}")
 
-                            extra_data['dt_reason'] = ''
-                            industry_txt = extra_data.get('Industry', None)
+                            extra_data["dt_reason"] = ""
+                            industry_txt = extra_data.get("Industry", None)
 
                             if industry_txt is None:
                                 # //update not found on search engine
-                                extra_data['dt_reason'] = 'Not company details in linkedin'
-                                print(f"320The word 'company' is not present in the URL. {extra_data['dt_reason']}")
+                                extra_data["dt_reason"] = (
+                                    "Not company details in linkedin"
+                                )
+                                print(
+                                    f"320The word 'company' is not present in the URL. {extra_data['dt_reason']}"
+                                )
                         else:
                             # //update not found on google
-                            extra_data['dt_reason'] = f'Not match {highest_value}% in google'
-                            print(f"324The word 'company' is not present in the URL. {extra_data['dt_reason']}")
+                            extra_data["dt_reason"] = (
+                                f"Not match {highest_value}% in google"
+                            )
+                            print(
+                                f"324The word 'company' is not present in the URL. {extra_data['dt_reason']}"
+                            )
                     else:
-                        extra_data['dt_reason'] = 'Not found in google'
-                        print(f"333The word 'company' is not present in the URL. {extra_data['dt_reason']}")
+                        extra_data["dt_reason"] = "Not found in google"
+                        print(
+                            f"333The word 'company' is not present in the URL. {extra_data['dt_reason']}"
+                        )
                     # print('done', extra_data)
                     try:
-                        print('Adding data: ', extra_data)
-                        return extra_data['email_domain']
+                        print("Adding data: ", extra_data)
                     except Exception as e:
                         print(f"Error: {e}")
                         return None
@@ -357,17 +447,18 @@ def process(data):
                 except WebDriverException as e:
                     # Handle the WebDriverException (connection timeout error)
                     print("Error:", e)
-                    print("The connection timed out. Check your internet connection or the target website.")
+                    print(
+                        "The connection timed out. Check your internet connection or the target website."
+                    )
                     engine.quit()
-            
+
             except IndexError:
                 # show error
-                print('Index does NOT exist')
+                print("Index does NOT exist")
             finally:
                 engine.quit()
-    
-    print(f"Added: {data_add}, Exists: {data_exist}")
 
+    print(f"Added: {data_add}, Exists: {data_exist}")
 
 
 def main():
@@ -381,16 +472,18 @@ def main():
 
                 channel.queue_declare(queue=queue_name, durable=True)
 
-                method_frame, header_frame, body = channel.basic_get(queue=queue_name, auto_ack=True)
+                method_frame, header_frame, body = channel.basic_get(
+                    queue=queue_name, auto_ack=True
+                )
 
                 if method_frame:
-                    detail_obj = json.loads(body.decode('utf-8'))
+                    detail_obj = json.loads(body.decode("utf-8"))
 
                     print("INFO : Picked data from queue...starting the process")
                     process([detail_obj])
 
                     print("INFO : Completed the process for one company")
-                
+
                 else:
                     print("No messages in the queue.")
 
@@ -402,7 +495,7 @@ def main():
 
                 print("INFO : Checking the queue again after 5s...")
                 time.sleep(5)
-            
+
             except Exception as e:
                 pass
 
@@ -415,10 +508,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
-
-    
-
-    
-
