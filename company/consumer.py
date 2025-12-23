@@ -1,4 +1,5 @@
 import csv
+import datetime
 
 from bson import ObjectId
 
@@ -230,7 +231,7 @@ def create_driver(proxy=None):
     return driver
 
 
-def process(data, start=0):
+def process(data, start=0, db=None, CSV_NAME=None):
     sleep_time_arr = [1, 2, 3, 4, 5, 6, 7]
     data_add = 0
     data_exist = 0
@@ -289,17 +290,33 @@ def process(data, start=0):
                     extra_data = {
                         "status": True,
                         "dt_status": True,
-                        "modifiedAt": str(formatted_time()),
+                        "updatedAt": str(formatted_time()),
                     }
                     if len(values):
                         # Find the highest value and its key
                         link = max(values, key=values.get)
                         highest_value = values[link]
-                        wrreplace(
-                            "company\\formatter.csv",
-                            row,
-                            f"{row},{link}",
-                        )
+                        # wrreplace(
+                        #     "company\\formatter.csv",
+                        #     row,
+                        #     f"{row},{link}",
+                        # )
+                        # if db:
+                        #     db.update_one(
+                        #         {"salesUrl": link},  # identity
+                        #         {
+                        #             "$set": {
+                        #                 "name": company_name,
+                        #                 "name_lc": company_name.lower(),
+                        #                 "updatedAt": datetime.datetime.utcnow(),
+                        #             },
+                        #             "$setOnInsert": {
+                        #                 "salesUrl": link,
+                        #                 "createdAt": datetime.datetime.utcnow(),
+                        #             },
+                        #         },
+                        #         upsert=True,
+                        #     )
                         print(
                             "Highest value:", str(formatted_time()), highest_value, link
                         )
@@ -327,7 +344,45 @@ def process(data, start=0):
 
                             sleep(2)
                             engine.implicitly_wait(2)
-                            extra_data["publicUrl"] = link
+                            extra_data["salesUrl"] = link
+                            try:
+                                top_card = engine.find_element(
+                                    by=By.CSS_SELECTOR,
+                                    value=f"div.top-card-layout__entity-info-container",
+                                )
+                            except Exception:
+                                top_card = None
+                            if top_card:
+                                h1 = top_card.find_element(
+                                    by=By.TAG_NAME, value="h1"
+                                ).get_attribute("innerText")
+                                h2 = top_card.find_element(
+                                    by=By.TAG_NAME, value="h2"
+                                ).get_attribute("innerText")
+                                p = top_card.find_elements(by=By.TAG_NAME, value="p")[
+                                    -1
+                                ].get_attribute("innerText")
+                                emp = (
+                                    p.strip().split(" ")[-2]
+                                    if p and ("employees") in p.lower()
+                                    else "N/A"
+                                )
+                                company = h1.strip() if h1 else "N/A"
+                                industry = h2.strip() if h2 else "N/A"
+                                try:
+                                    nEmp = (
+                                        int(emp.replace(",", "")) if emp != "N/A" else 0
+                                    )
+                                except ValueError:
+                                    nEmp = 0
+                                print(
+                                    f"Company: {company}, Industry: {industry}, Employees: {nEmp}"
+                                )
+                                extra_data["name"] = company
+                                extra_data["industry"] = industry
+                                extra_data["employees"] = nEmp
+
+                            # search_results = engine.find_elements('css selector', '.tF2Cxc')
                             # search_results2 = engine.find_elements('css selector', '.tF2Cxc')
                             elements = engine.find_elements(
                                 "css selector",
@@ -437,6 +492,16 @@ def process(data, start=0):
                     # print('done', extra_data)
                     try:
                         print("Adding data: ", extra_data)
+                        if extra_data.get("salesUrl", None):
+                            db.insert_one(
+                                {
+                                    "excel_source": CSV_NAME,
+                                    "createdAt": datetime.datetime.utcnow(),
+                                    **extra_data,
+                                }
+                            )
+
+                            data_add += 1
                     except Exception as e:
                         print(f"Error: {e}")
                         return None

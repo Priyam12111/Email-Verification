@@ -5,7 +5,11 @@ from bs4 import BeautifulSoup
 import pymongo
 import requests
 from consumer import *
-
+from company_data_retrieve import (
+    fetch_linkedin_company_data,
+    iter_first_element_children,
+    to_company_url,
+)
 
 MONGO_URI = os.getenv(
     "MONGO_URI",
@@ -13,8 +17,8 @@ MONGO_URI = os.getenv(
 )
 DB_NAME = "e-finder"
 COLLECTION_NAME = "company-1"
-
-CSV_PATH = Path("company") / "formatter.csv"
+CSV_NAME = "Training and development companies.csv"
+CSV_PATH = Path("company") / CSV_NAME
 
 
 client = pymongo.MongoClient(MONGO_URI)
@@ -51,7 +55,14 @@ def get_li_page(
     """Convert a LinkedIn company URL to its Sales Navigator equivalent."""
     if not url:
         return None
-
+    if not url.startswith("https://www.linkedin.com/company/"):
+        return None
+    company_url_id = url.split("https://www.linkedin.com/company/")[-1].strip("/")
+    cookie = True
+    try:
+        int(company_url_id)
+    except ValueError:
+        cookie = False
     headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "accept-language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6",
@@ -67,22 +78,22 @@ def get_li_page(
         "sec-fetch-user": "?1",
         "upgrade-insecure-requests": "1",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-    }
-
-    cookies = {
-        "bcookie": "v=2&2190d805-ace0-478a-8743-f1df9156e5da",
-        "lang": "v=2&lang=en-us",
-        "lidc": "b=VGST02:s=V:r=V:a=V:p=V:g=3679:u=1:x=1:i=1766135268:t=1766221668:v=2:sig=AQEf2QrJgi7_99jW35ymc-dKnLS_dYAW",
-        "JSESSIONID": "ajax:0475566273713126418",
-        "bscookie": "v=1&2025121909074783d412ae-0f13-4cc2-8c9e-948a65f31919AQFD2igWmhmjwk4BC5PsMdl_fv-OoA3C",
+        "Cookie": (
+            'bcookie="v=2&bf7ed467-3c93-4d1c-8a4b-c28199502403"; bscookie="v=1&20251201062241f11b4250-b4c2-4f19-8c55-dd6d8205bf23AQF1uueACroQVe40Z-spqwjlUDqIngm9"; timezone=Asia/Calcutta; li_theme=light; li_theme_set=app; dfpfpt=38371b022267448da88eb7d2a2e2d275; _pxvid=252cba50-ce7e-11f0-8059-9f84b84af31d; sdui_ver=sdui-flagship:0.1.22557+SduiFlagship0; visit=v=1&M; fid=AQGIEXayR8hMJgAAAZsq29hgQLJu7xHS5ufEIGga4i-32lZhVylK-hN81qsQCeG10y0w7v-_0NFDog; li_rm=AQE4En9C6GMeUQAAAZsq5Ieg7J7ZYwTNgUbQkIzDoJAh2Ki57D1ufNkP95Vg3i30F-Qdbk3iXI-Mgfcea7aiSAzDdvezf0GrfkfFemi57warsNamnV4XRu7pVvHp1hfGap4u3w7nR-3n2VDL3i3UmLMxJ7v7kXira6w_daveYKn5TKiWlIR4ybpVYe2ZhcAOK1vglUfR18qy7E6M2oQJGDDs-oUTy5z1DQXjYm0EOpu70_5luoSLgcNAzb24MAfyMNHc9nc0IBE5mAgthSZaB89N39K3XQZ7taK2-mhtRreu4zYpuKORAV566mSGXUnyXtC8gPVz-8WqUuz_ND_Llg; JSESSIONID="ajax:4043523951376788201"; g_state={"i_l":0}; liap=true; li_at=AQEDAT6ZujgBWrfAAAABmzaVJUcAAAGbWqGpR1YAgdpu_NsDxp36rDwyhO4M_TY4qUltIyOgzbGO6Y_QJLDAakoWLYHsawSzhfQNqF_P4UP6wPgh-hebVyCciIY1crOKI8tQRk2_zKJBd3xV2SiCm4Kr; lidc="b=OB72:s=O:r=O:a=O:p=O:g=569:u=144:x=1:i=1766147303:t=1766221373:v=2:sig=AQFSoRtYKp0SKJ4huB_qhctO2gMquHc-"; UserMatchHistory=AQJzGLKpigN6jgAAAZs2v_S6uF0SA4lkS5oBD84Wqy-k9ZCQKFRmVmU60sxWDREFgerlBksvW2X7jpIM8tB8jxTgQWAMBvuhhrGh8LjE3WB8Cgq90CTMEiu6KTFzbkiA5li9u19wAqhXX1xpQHibnlshUTJtZinpKho9Q9gALVwPqEtpqXY2WiADl8d2uK_2XAqtfQm4nEVGonEwSkVzZ8BayNQaBYE1E1JolqRx7pVXGGmOrSv8bdl8z4nvsmhp3PmMV7eu5DMwA9bGt10ZyoAc7gGmhavch8DJxmgFEu34JsHzkWHblU9WG3yf0SD4CQgbwgamK5Q1d1Q4SHx_; fptctx2=taBcrIH61PuCVH7eNCyH0J9Fjk1kZEyRnBbpUW3FKs9tGxvFYomOX3g9ICSZbFXeucH8ESkVbDYlYqJ8q%252fQskF1V1hgQfEMCoeucYm1aTH3yBrsGjvTvuMtLVfyitJt%252fPwc2LBeecoY40gzXsOExwicSEyVPIcokXXl0RFMl%252fy1lp5JEWt%252f7DAvy4p0F68y%252fwGfWADRmK%252fUEwJipceFYk6KYVgPpVEkfZX13QJaFHp9vQNlZiMxyTaaD9nVKq00amN3%252bU6AZ9Ml7BYjErguV7NdyBcsTkwRfYLDRTIdr%252bBaGC1U53AZNEKaEEwXrROLMi8oB43LhNwA77pFtSf%252fmvD7DVnUvs2bcfotiG96lk%252bo%253d; PLAY_LANG=en; lang=v=2&lang=en-US"'
+            if cookie
+            else ""
+        ),
     }
 
     resp = requests.get(url, headers=headers, timeout=20)
+    print(resp.url)  # final URL after redirect
+    print(resp.history)
     if resp.status_code != 200:
         print(resp.text)
         return None
     html = BeautifulSoup(resp.text, "html.parser")
     top_card = html.find("div", class_="top-card-layout__entity-info-container")
+    print(top_card)
     if top_card:
         h1 = top_card.find("h1")
         h2 = top_card.find("h2")
@@ -122,5 +133,54 @@ def main(start=0, grind=False) -> None:
 
 
 if __name__ == "__main__":
-    # print(get_li_page("https://www.linkedin.com/company/coursera/"))
-    main(73, grind=True)
+    with open(CSV_PATH, "r", encoding="utf-8") as f:
+        rows = f.read().splitlines()
+    start = 11
+    end = 20
+    for row in rows[start:end]:
+        name_lc = sanitize_company_name(row)
+        expected_url = row.split(",")[1].strip()
+        url = find_company_by_name(name_lc)
+        print("name:", name_lc, "url:", url)
+        if not url:
+            link = process([name_lc], db=db, CSV_NAME=CSV_NAME)
+            continue
+        with requests.Session() as session:
+            payload = fetch_linkedin_company_data(name_lc, session=session)
+            if payload:
+                print("Fetched data for:", name_lc)
+                for child in iter_first_element_children(payload):
+                    child_id = child.get("id", "")
+                    company_url = to_company_url(child_id)
+                    if not company_url:
+                        continue
+
+                    if company_url == expected_url:
+                        employee_count_range = child.get("employeeCountRange", {})
+                        industry = child.get("industry", {})
+                        address = child.get("address", {})
+                        country = (
+                            address.get("country", "")
+                            if isinstance(address, dict)
+                            else ""
+                        )
+                        print(
+                            f'Match found for "{name_lc}" with ID: {company_url} '
+                            f"employeeCountRange: {employee_count_range} "
+                            f"industry: {industry} "
+                            f"country: {country}"
+                        )
+                        print(repr(expected_url))
+                        status = db.update_one(
+                            {"salesUrl": url},
+                            {
+                                "$set": {
+                                    "employeeCountRange": employee_count_range,
+                                    "industry": industry,
+                                    "country": country,
+                                    "excel_source": CSV_NAME,
+                                }
+                            },
+                        )
+                        print("Updated documents:", status.modified_count)
+                        print("----")
