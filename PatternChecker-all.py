@@ -19,6 +19,26 @@ from utils.helpers import now_ist, inc_stats
 
 browser_manager = BrowserManager()
 
+TOTAL_PATTERNS = [
+    "{first}.{last}@{domain}",
+    "{first_initial}{last}@{domain}",
+    "{first}@{domain}",
+    "{first}.{last_initial}@{domain}",
+    "{last}.{first}@{domain}",
+    "{last_initial}.{first}@{domain}",
+    "{first_initial}.{last}@{domain}",
+    "{last_initial}{first_initial}@{domain}",
+    "{last}@{domain}",
+    "{first}{last_initial}@{domain}",
+    "{first}{last}@{domain}",
+    "{first}_{last}@{domain}",
+    "{first}-{last}@{domain}",
+    "{last}{first_initial}@{domain}",
+    "{first_initial}{last_initial}@{domain}",
+    "{last_initial}{first}@{domain}",
+    "{last}{first}@{domain}",
+]
+
 PATTERNS = [
     "{first}.{last}@{domain}",
     "{first_initial}{last}@{domain}",
@@ -440,15 +460,15 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
     """
     _assert_driver_alive(driver)
     fullName = user.get("fullName", "").split()
-    firstName = fullName[0] if len(fullName) > 0 else ""
-    lastName  = fullName[-1] if len(fullName) > 1 else ""
-    user_id = user["_id"] if isinstance(user.get("_id"), ObjectId) else ObjectId(user["_id"])
+    firstName = (user.get("firstName") or "").strip()
+    lastName  = (user.get("lastName") or "").strip()
+    user_id   = ObjectId(user["_id"])
     company_id = user.get("refCompanyId")
 
     comp = company.find_one({"_id": company_id}) if company_id else None
-    domain = (comp.get("email_domain") or comp.get("domain")) if comp else None
-    name = comp.get("name") if comp else None
-    if not domain or not name:
+    domain = comp.get("email_domain") or comp.get("domain") if comp else None
+    # name = comp.get("name")
+    if not domain:
         users.update_one(
             {"_id": user_id},
             {"$set": {
@@ -458,7 +478,7 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
                 # "v6": len(PATTERNS)
             }}
         )
-        log.info(f"[SKIP] user={user_id} company={company_id} reason=missing Domain:{domain} Name:{name}")
+        log.info(f"[SKIP] user={user_id} company={company_id} reason=missing Domain:{domain}")
         return        
 
     if comp:
@@ -467,14 +487,14 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
             vps = comp.get("verified_patterns")
             if isinstance(vps, list) and vps:
                 try:
-                    idx = PATTERNS.index(vps[0])
+                    idx = TOTAL_PATTERNS.index(vps[0])
                 except ValueError:
                     idx = None
 
         if idx is not None:
             try:
                 email = (
-                    PATTERNS[idx]
+                    TOTAL_PATTERNS[idx]
                     .format(
                         first=firstName,
                         last=lastName,
@@ -523,7 +543,7 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
 
         try:
             email = (
-                PATTERNS[idx]
+                TOTAL_PATTERNS[idx]
                 .format(
                     first=firstName,
                     last=lastName,
@@ -583,7 +603,7 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
                     {"_id": company_id},
                     {"$set": {
                         "verified_pattern_index": idx,
-                        "verified_patterns": [PATTERNS[idx]],
+                        "verified_patterns": [TOTAL_PATTERNS[idx]],
                         "verifiedAt": iso_now_str(),
                         "provider_assumed": used_provider
                     }}
