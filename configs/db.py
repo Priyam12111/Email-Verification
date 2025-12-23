@@ -18,7 +18,7 @@ client = MongoClient(uri)
 
 log.info("Connected to MongoDB")
 db = client["e-finder"]
-users = db["users-1"]
+users = db["users-new"]
 company = db["company-1"]
 catch_all_patterns = db["catch_all_patterns"]
 pattern_stats = db["pattern_stats"]

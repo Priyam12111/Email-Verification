@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sys
 import os
 import re
 import time
@@ -50,6 +50,51 @@ EMAIL_SYNTAX_RE = re.compile(
     r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
     re.IGNORECASE
 )
+
+class DriverUnavailable(RuntimeError):
+    """Raised when Selenium driver is missing/closed/unusable."""
+    pass
+
+def _is_driver_dead_exception(exc: Exception) -> bool:
+    msg = (str(exc) or "").lower()
+    # common selenium/chrome driver-dead signals
+    needles = [
+        "invalid session id",
+        "session deleted",
+        "disconnected",
+        "chrome not reachable",
+        "cannot determine loading status",
+        "target window already closed",
+        "no such window",
+        "web view not found",
+        "connection refused",
+        "connection reset",
+        "failed to decode response",
+        "received inspector.detached",
+        "browser has closed",
+        "window was already closed",
+    ]
+    return any(n in msg for n in needles)
+
+def _assert_driver_alive(driver) -> None:
+    """
+    Fast sanity check:
+    - driver exists
+    - has session_id
+    - can execute a trivial script
+    """
+    if driver is None:
+        raise DriverUnavailable("Driver is None (not initialized).")
+
+    sid = getattr(driver, "session_id", None)
+    if not sid:
+        raise DriverUnavailable("Driver session_id missing (likely closed).")
+
+    try:
+        # cheap ping to ensure the connection/session is alive
+        driver.execute_script("return 1")
+    except Exception as e:
+        raise DriverUnavailable(f"Driver not responding / closed: {e}") from e
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -393,15 +438,16 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
     Uses your existing provider-based browser validation.
     Renews lease periodically so long-running checks don't lose their claim.
     """
+    _assert_driver_alive(driver)
     fullName = user.get("fullName", "").split()
     firstName = fullName[0] if len(fullName) > 0 else ""
     lastName  = fullName[-1] if len(fullName) > 1 else ""
-    user_id   = ObjectId(user["_id"])
+    user_id = user["_id"] if isinstance(user.get("_id"), ObjectId) else ObjectId(user["_id"])
     company_id = user.get("refCompanyId")
 
     comp = company.find_one({"_id": company_id}) if company_id else None
-    domain = comp.get("email_domain") or comp.get("domain") if comp else None
-    name = comp.get("name")
+    domain = (comp.get("email_domain") or comp.get("domain")) if comp else None
+    name = comp.get("name") if comp else None
     if not domain or not name:
         users.update_one(
             {"_id": user_id},
@@ -499,10 +545,13 @@ async def process_user_patterns(driver, user, PATTERNS, verifier, catch_all_doma
         used_provider = None
 
         for provider in ("google", "microsoft"):
+            _assert_driver_alive(driver)
             try:
                 is_browser_valid = browser_based_valid(driver, email, provider)
                 result = {"valid": is_browser_valid}
             except Exception as e:
+                if _is_driver_dead_exception(e):
+                    raise DriverUnavailable(f"WebDriver died during validation: {e}") from e
                 log.info(f"browser_based_valid exception for {email} ({provider}): {e}")
                 result = {"valid": False}
 
@@ -565,11 +614,22 @@ async def main_loop():
 
     verifier = EmailVerifier(concurrency=1)
     catch_all_domains: set[str] = set()
-    driver = browser_manager.open_browser()
+    driver = None
+    try:
+        driver = browser_manager.open_browser()
+        _assert_driver_alive(driver)
+    except Exception as e:
+        log.error(f"[FATAL] Could not initialize browser driver. Terminating. err={e}")
+        raise SystemExit(2)
 
     try:
         log.info(f"Worker {WORKER_ID} started with lease={LEASE_SECS}s renew={RENEW_EVERY_SECS}s")
         while True:
+            try:
+                _assert_driver_alive(driver)
+            except DriverUnavailable as e:
+                log.error(f"[FATAL] Driver became unavailable. Terminating worker. err={e}")
+                raise SystemExit(3)
             # Atomically claim one user
             # user = claim_one_user()
             user = claim_one_user_verified_company()
@@ -583,14 +643,20 @@ async def main_loop():
 
             try:
                 await process_user_patterns(driver, user, PATTERNS, verifier, catch_all_domains)
+            except DriverUnavailable as e:
+                log.error(f"[FATAL] Driver died mid-run for user {uid}. Terminating. err={e}")
+                raise SystemExit(4)
             except Exception as e:
                 log.error(f"Worker {WORKER_ID} failed for user {uid}: {e}\n{traceback.format_exc()}")
             finally:
                 release_lock(uid)
 
     finally:
-        if driver:
-            browser_manager.close_browser(driver)
+        try:
+            if driver:
+                browser_manager.close_browser(driver)
+        except Exception as e:
+            log.warning(f"close_browser warning: {e}")
         log.info(f"Worker {WORKER_ID} stopped.")
 
 if __name__ == "__main__":

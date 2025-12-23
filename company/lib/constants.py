@@ -1,7 +1,7 @@
 # define constant variables
 
 COLLECTION_COMPANY = 'company-1'
-COLLECTION_USER = 'users-1'
+COLLECTION_USER = 'users-new'
 COLLECTION_URL = 'urls'
 COLLECTION_CREDENTIAL = 'credentials'
 COLLECTION_GMAIL_CREDENTIAL = 'gmail-credential'
