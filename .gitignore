@@ -8,3 +8,4 @@ test.py
 fetch_domain.spec
 /xVenv
 /.venv
+company/.env

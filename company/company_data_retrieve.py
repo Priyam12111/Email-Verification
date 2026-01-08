@@ -1,23 +1,43 @@
 from __future__ import annotations
 
+import argparse
 import csv
+import logging
+import os
+import re
+from datetime import datetime
 from pathlib import Path
+from time import sleep
 from typing import Any, Iterable, Optional
 
+import pymongo
 import requests
-
-from all_imports import wrreplace
 
 
 LINKEDIN_SALES_FACET_TYPEAHEAD_URL = (
     "https://www.linkedin.com/sales-api/salesApiFacetTypeahead"
 )
-CSV_PATH = Path("company") / "formatter.csv"
-
-# Keep the current behavior (the old script breaks after the first row).
-PROCESS_ONLY_FIRST_DATA_ROW = False
 
 
+logger = logging.getLogger(__name__)
+
+
+MONGO_URI = os.getenv(
+    "MONGO_URI",
+    "mongodb://admin:AdminStrongPass123@14.195.222.181:8989/Syncupteams?authSource=admin&directConnection=true",
+)
+DB_NAME = "e-finder"
+COLLECTION_NAME = "company-1"
+
+
+client = pymongo.MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=3000,
+    maxPoolSize=10,
+    connectTimeoutMS=3000,
+    socketTimeoutMS=3000,
+)
+db = client[DB_NAME][COLLECTION_NAME]
 DEFAULT_PARAMS: dict[str, Any] = {
     "q": "query",
     "start": 0,
@@ -54,26 +74,50 @@ HEADERS: dict[str, str] = {
 
 
 def sanitize_company_name(raw_name: str) -> str:
-    """Normalize a company name for searching (lowercase + remove common suffixes)."""
+    """Normalize a company name for searching.
 
-    name = raw_name.lower()
-    for suffix in ("ltd", "llc", "inc", "corp", "co", "ind"):
-        name = name.replace(suffix, "").strip() if name.endswith(suffix) else name
-    return name.strip()
+    - Lowercase
+    - Trim punctuation
+    - Remove common legal suffixes when they appear at the end
+    """
+
+    name = re.sub(r"\s+", " ", (raw_name or "").strip().lower())
+    name = name.strip("\t ,.")
+
+    suffixes = (
+        " ltd",
+        " ltd.",
+        " limited",
+        " inc",
+        " inc.",
+        " llc",
+        " corp",
+        " corp.",
+        " co",
+        " co.",
+        " ind",
+    )
+    for suffix in suffixes:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)].strip("\t ,.")
+            break
+
+    return name
 
 
-def iter_companies_from_csv(path: Path) -> Iterable[tuple[str, str]]:
-    """Yield (company_name, expected_linkedin_url) from formatter.csv."""
+def iter_companies_from_csv(path: Path) -> Iterable[str]:
+    """Yield company names from the first column of a CSV file."""
 
     with path.open("r", encoding="utf-8", newline="") as file:
         reader = csv.reader(file)
         # skip header
         next(reader, None)
         for row in reader:
-            if len(row) != 2:
-                print(f"Invalid row: {row}")
+            if not row:
                 continue
-            yield (row[0].strip(), row[1].strip())
+            name = (row[0] or "").strip()
+            if name:
+                yield name
 
 
 def fetch_linkedin_company_data(
@@ -89,13 +133,28 @@ def fetch_linkedin_company_data(
     request_params["query"] = company_query
 
     http = session or requests
-    resp = http.get(
-        LINKEDIN_SALES_FACET_TYPEAHEAD_URL,
-        params=request_params,
-        headers=HEADERS,
-        timeout=20,
-    )
-    return resp.json() if resp.status_code == 200 else None
+    try:
+        resp = http.get(
+            LINKEDIN_SALES_FACET_TYPEAHEAD_URL,
+            params=request_params,
+            headers=HEADERS,
+            timeout=20,
+        )
+    except requests.RequestException:
+        logger.exception("LinkedIn API request errored for query=%r", company_query)
+        sleep(20)
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "LinkedIn API request failed for query=%r status=%s",
+            company_query,
+            resp.status_code,
+        )
+        sleep(20)
+        return None
+
+    return resp.json()
 
 
 def iter_first_element_children(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
@@ -124,59 +183,232 @@ def to_company_url(li_urn: str) -> Optional[str]:
     return f"https://www.linkedin.com/company/{suffix}"
 
 
-def main(start: int = 0) -> None:
+def _find_existing_company_by_prefix(name_prefix_lc: str) -> Optional[dict[str, Any]]:
+    """Return the first DB record whose name_lc begins with the given prefix."""
+
+    if not name_prefix_lc:
+        return None
+    safe_prefix = re.escape(name_prefix_lc)
+    cursor = db.find({"name_lc": {"$regex": f"^{safe_prefix}"}}).limit(1)
+    return next(cursor, None)
+
+
+def _upsert_company_record(
+    *,
+    existing: Optional[dict[str, Any]],
+    raw_name: str,
+    search_name: str,
+    company_url: str,
+    employee_count_range: Any,
+    industry: Any,
+    country: str,
+    excel_source: str,
+) -> None:
+    try:
+        doc = {
+            "name": raw_name,
+            "name_lc": raw_name.lower(),
+            "search_name": search_name,
+            "salesUrl": company_url,
+            "employeeCountRange": employee_count_range,
+            "industry": industry,
+            "country": country,
+            "excel_source": excel_source,
+        }
+
+        if existing:
+            db.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {**doc, "updatedAt": datetime.utcnow()}},
+                upsert=True,
+            )
+        else:
+            db.insert_one({**doc, "createdAt": datetime.utcnow()})
+
+    except pymongo.errors.DuplicateKeyError:
+        logger.warning("Duplicate key: %s", raw_name)
+
+
+def process_csv(
+    csv_path: Path,
+    *,
+    excel_source: str,
+    start_row: int = 0,
+    request_pause_every: int = 100,
+    pause_seconds: int = 60,
+) -> None:
+    """Read companies from a CSV and enrich/insert them into MongoDB."""
+
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV not found: {csv_path}")
+
+    logger.info("Processing %s (start_row=%s)", csv_path, start_row)
+
     with requests.Session() as session:
-        for idx, (raw_name, expected_url) in enumerate(
-            iter_companies_from_csv(CSV_PATH)
-        ):
-            split_urls = expected_url.split("/")
-            isSales = False
-            if len(split_urls) >= 4:
-                isSales = expected_url.split("/")[4].isdigit()
-            else:
-                print(f"Sales URL not detected for {raw_name}: {split_urls}")
-                continue
-            if (
-                idx < start
-                or not isSales
-                or not expected_url.startswith("https://www.linkedin.com/company/")
-            ):
-                print(f"Skipping {idx}: {raw_name} -> {expected_url}")
-                continue
-            search_name = sanitize_company_name(raw_name)
-            print(f"Searching for company: {search_name}")
-
-            payload = fetch_linkedin_company_data(search_name, session=session)
-            if not payload:
+        processed = 0
+        for idx, raw_name in enumerate(iter_companies_from_csv(csv_path), start=1):
+            if idx < start_row:
+                logger.debug("Skipping row %s: %s", idx, raw_name)
                 continue
 
-            for child in iter_first_element_children(payload):
-                child_id = child.get("id", "")
-                company_url = to_company_url(child_id)
-                if not company_url:
+            try:
+                search_name = sanitize_company_name(raw_name)
+                existing = _find_existing_company_by_prefix(search_name)
+                if existing and existing.get("industry"):
+                    logger.info(
+                        "Already in DB row=%s name=%r url=%s",
+                        idx,
+                        raw_name,
+                        existing.get("salesUrl"),
+                    )
                     continue
 
-                if company_url == expected_url:
+                processed += 1
+                if request_pause_every and processed % request_pause_every == 0:
+                    logger.info(
+                        "Processed %s rows; pausing %ss...", processed, pause_seconds
+                    )
+                    sleep(pause_seconds)
+
+                logger.info(
+                    "Searching row=%s name=%r (query=%r)", idx, raw_name, search_name
+                )
+
+                payload = fetch_linkedin_company_data(search_name, session=session)
+                if not payload:
+                    continue
+
+                for child in iter_first_element_children(payload):
+                    company_url = to_company_url(child.get("id", ""))
+                    if not company_url:
+                        continue
+
                     employee_count_range = child.get("employeeCountRange", {})
                     industry = child.get("industry", {})
                     address = child.get("address", {})
                     country = (
                         address.get("country", "") if isinstance(address, dict) else ""
                     )
-                    print(
-                        f'Match found for "{raw_name}" with ID: {company_url} '
-                        f"employeeCountRange: {employee_count_range} "
-                        f"industry: {industry}"
-                        f"country: {country}"
+
+                    logger.info(
+                        "Match row=%s name=%r url=%s employees=%s industry=%s country=%s",
+                        idx,
+                        raw_name,
+                        company_url,
+                        employee_count_range,
+                        industry,
+                        country,
                     )
-                    print("----")
-                    # wrreplace(
-                    #     str(CSV_PATH),
-                    #     expected_url,
-                    #     f"{expected_url},{company_url},{employee_count_range},{industry},{country}",
-                    # )
+
+                    _upsert_company_record(
+                        existing=existing,
+                        raw_name=raw_name,
+                        search_name=search_name,
+                        company_url=company_url,
+                        employee_count_range=employee_count_range,
+                        industry=industry,
+                        country=country,
+                        excel_source=excel_source,
+                    )
                     break
+            except Exception:
+                logger.exception("Error processing row=%s name=%r", idx, raw_name)
+
+
+def _prompt_int(
+    prompt: str, *, default: Optional[int] = None, min_value: int = 0
+) -> int:
+    while True:
+        raw = input(prompt).strip()
+        if raw == "" and default is not None:
+            value = default
+        else:
+            try:
+                value = int(raw)
+            except ValueError:
+                print("Please enter a valid integer.")
+                continue
+        if value < min_value:
+            print(f"Value must be >= {min_value}.")
+            continue
+        return value
+
+
+def _list_excel_files(excels_dir: Path) -> list[str]:
+    if not excels_dir.exists() or not excels_dir.is_dir():
+        raise FileNotFoundError(f"Excels directory not found: {excels_dir}")
+    return [f for f in os.listdir(excels_dir) if not f.startswith("~$")]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Enrich company records using LinkedIn Sales API + MongoDB"
+    )
+    parser.add_argument(
+        "--excels-dir", default="Excels", help="Directory containing CSV files"
+    )
+    parser.add_argument(
+        "--excel-start", type=int, default=None, help="Start index in Excels listing"
+    )
+    parser.add_argument(
+        "--excel-end",
+        type=int,
+        default=None,
+        help="End index (inclusive) in Excels listing",
+    )
+    parser.add_argument(
+        "--start-row",
+        type=int,
+        default=None,
+        help="Start row in the first CSV (1-based data row)",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR)",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+
+    excels_dir = Path(args.excels_dir)
+    excel_files = _list_excel_files(excels_dir)
+    if not excel_files:
+        raise RuntimeError(f"No files found in {excels_dir}")
+
+    for i, filename in enumerate(excel_files):
+        print(f"[{i}] : {filename}")
+
+    excel_start = args.excel_start
+    if excel_start is None:
+        excel_start = _prompt_int("Enter starting excel index: ", min_value=0)
+
+    excel_end = args.excel_end
+    if excel_end is None:
+        excel_end = _prompt_int(
+            f"Enter ending excel index (default {len(excel_files) - 1}): ",
+            default=len(excel_files) - 1,
+            min_value=excel_start,
+        )
+
+    start_row = args.start_row
+    if start_row is None:
+        start_row = _prompt_int(
+            "Enter starting index for iterate (0 for beginning): ",
+            default=0,
+            min_value=0,
+        )
+
+    excel_end = min(excel_end, len(excel_files) - 1)
+    for file_index in range(excel_start, excel_end + 1):
+        csv_name = excel_files[file_index]
+        csv_path = excels_dir / csv_name
+        process_csv(csv_path, excel_source=csv_name, start_row=start_row)
+        start_row = 0
 
 
 if __name__ == "__main__":
-    main(0)
+    main()
